@@ -6,7 +6,8 @@ import path from 'node:path';
 const require=createRequire(import.meta.url);
 const root=path.resolve(import.meta.dirname,'..');
 const target=process.argv.find(value=>value.startsWith('--packaged='))?.slice(11);
-const label=target?'packaged':'source';
+const label=process.argv.find(value=>value.startsWith('--label='))?.slice(8)||(target?'packaged':'source');
+assert.match(label,/^[a-z0-9-]+$/);
 const out=path.join(root,'artifacts',`native-hidden-${label}.json`);
 await mkdir(path.dirname(out),{recursive:true});await rm(out,{force:true});
 const executable=target?path.resolve(target):require('electron');
@@ -20,4 +21,9 @@ await writeFile(out.replace(/\.json$/,'.log'),log);
 const report=JSON.parse(await readFile(out,'utf8'));
 assert.equal(code,0,report.error||log);assert.equal(report.passed,true,report.error||JSON.stringify(report));assert.equal(report.visible,false);
 assert.equal(report.renderer.canvas,true);assert.equal(report.renderer.bridge,true);assert.equal(report.practice.skills,4);assert.deepEqual(report.errors,[]);
-console.log(JSON.stringify({label,passed:true,visible:false,renderer:report.renderer,practice:report.practice,report:out},null,2));
+if(process.env.GLASS_LANE_DIAGNOSTIC_ONLINE==='1'){
+  const expected=process.env.GLASS_LANE_EXPECTED_SERVER_URL||'https://glass-lane-moba.onrender.com';
+  assert.equal(report.serviceInfo.defaultServerUrl,expected);assert.equal(report.serverUrlBeforePractice,expected);assert.equal(report.serverUrl,expected);
+  assert.notEqual(report.serverUrl,report.serviceInfo.localUrl);
+}
+console.log(JSON.stringify({label,passed:true,visible:false,renderer:report.renderer,practice:report.practice,serverUrl:report.serverUrl,report:out},null,2));

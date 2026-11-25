@@ -55,9 +55,12 @@ async function verifyHiddenClient(){
   await waitForRenderer(`document.getElementById('connection')?.textContent==='房间服务已连接'`,diagnosticOnline?65000:12000);
   diagnostics.serviceInfo=await win.webContents.executeJavaScript(`window.desktop.info()`);
   diagnostics.connection=await win.webContents.executeJavaScript(`document.getElementById('connection')?.textContent`);
+  diagnostics.serverUrlBeforePractice=await win.webContents.executeJavaScript(`document.getElementById('server-url')?.value`);
   fs.writeFileSync(diagnosticOutput.replace(/\.json$/,'.png'),(await win.webContents.capturePage()).toPNG());
   await win.webContents.executeJavaScript(`document.getElementById('practice').click()`);
   diagnostics.practice=await waitForRenderer(`!document.getElementById('hud').hidden&&document.getElementById('clock')?.textContent!=='00:00'?({hud:!document.getElementById('hud').hidden,clock:document.getElementById('clock').textContent,skills:document.querySelectorAll('#hud .ability').length}):null`,diagnosticOnline?55000:12000);
+  diagnostics.serverUrl=await win.webContents.executeJavaScript(`document.getElementById('server-url')?.value`);
+  if(diagnosticOnline&&(!clientServer()||diagnostics.serverUrlBeforePractice!==clientServer()||diagnostics.serverUrl!==clientServer()))throw Error('线上诊断未持续使用配置的房间服务。');
   fs.writeFileSync(diagnosticOutput.replace(/\.json$/,'-practice.png'),(await win.webContents.capturePage()).toPNG());
   diagnostics.passed=diagnostics.practice.skills===4&&win.isVisible()===false&&diagnostics.errors.length===0;
   await finishDiagnostics();

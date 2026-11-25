@@ -1,6 +1,6 @@
 {
   "name": "glass-lane",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "type": "module",
   "description": "透明单线 · 桌面联机MOBA",

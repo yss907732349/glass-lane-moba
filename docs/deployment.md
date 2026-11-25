@@ -4,6 +4,10 @@ Windows EXE 是透明桌面客户端；公开的 Node.js 服务负责房间、�
 
 MOBA 使用 `glass-lane-v1` 协议，不能连接斗地主的 `https://glass-landlord.onrender.com` 服务。部署时创建独立服务，保留原斗地主服务和配置。
 
+## 当前线上服务
+
+https://glass-lane-moba.onrender.com 已通过实际公网双人建房、开局、移动与技能升级、断线重连和房间清理验收。0.1.2 Windows 客户端通过 desktop/client-config.json 默认连接此地址。Render 免费服务空闲后可能休眠，首次连接需等待唤醒。
+
 ## Render Free
 
 本目录的 `render.yaml` 与 `Dockerfile` 描述一个免费、单实例的 Docker Web Service，建议服务名为 `glass-lane-moba`。实际地址以 Render 创建结果为准，不能仅凭服务名推定已经上线。
