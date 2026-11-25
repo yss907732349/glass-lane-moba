@@ -1,0 +1,41 @@
+{
+  "license": "CC0-1.0",
+  "source": "https://kenney.nl/assets/tiny-dungeon",
+  "frameWidth": 32,
+  "frameHeight": 32,
+  "columns": 4,
+  "rows": 3,
+  "animations": {
+    "idle": {
+      "start": 0,
+      "end": 3,
+      "frameRate": 4
+    },
+    "walk": {
+      "start": 4,
+      "end": 7,
+      "frameRate": 9
+    },
+    "attack": {
+      "start": 8,
+      "end": 11,
+      "frameRate": 10
+    }
+  },
+  "heroes": {
+    "knight": {
+      "portrait": "/assets/hero-knight.png",
+      "sheet": "/assets/hero-knight-sheet.png",
+      "originalTile": 97,
+      "originX": 0.5,
+      "originY": 0.875
+    },
+    "mage": {
+      "portrait": "/assets/hero-mage.png",
+      "sheet": "/assets/hero-mage-sheet.png",
+      "originalTile": 84,
+      "originX": 0.5,
+      "originY": 0.875
+    }
+  }
+}

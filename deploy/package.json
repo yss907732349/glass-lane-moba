@@ -1,0 +1,8 @@
+{
+  "name": "glass-lane-room-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Production dependencies for the authoritative Glass Lane room server",
+  "engines": { "node": ">=24 <25" },
+  "dependencies": { "ws": "8.23.0" }
+}

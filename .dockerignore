@@ -1,0 +1,15 @@
+node_modules
+dist
+build
+release
+artifacts
+.git
+.impeccable
+desktop
+scripts
+*.log
+*.tgz
+.env
+.env.*
+!deploy/package.json
+!deploy/package-lock.json
