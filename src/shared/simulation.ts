@@ -1,4 +1,5 @@
-import { HEROES, ITEMS, RULES, SUMMONERS, TERRAIN, WORLD, xpForNextLevel } from './data.ts';
+import { HEROES, ITEMS, RULES, SUMMONERS, TERRAIN, WORLD, xpForNextLevel, SOURCE_HEROES, SOURCE_UNIT, HERO_IDS, canUpgradeSkill, skillForRank } from './data.ts';
+import { attackCadence, bodyRadius, breakSkillStealth, castSourceSkill, hasStatus, mitigateSourceDamage, onSourceTakedown, speedMultiplier, stepSourceCombat } from './source-combat.ts';
 import type { Command, Effect, HeroKind, MatchState, Point, SkillSlot, Team, Unit } from './types.ts';
 
 const distance = (a: Point, b: Point) => Math.hypot(a.x - b.x, a.y - b.y);
@@ -17,7 +18,9 @@ export function isPointInTeamVision(s: MatchState, point: Point, viewerTeam: Tea
   return !!hero && distance(hero, point) <= RULES.visionRadius;
 }
 function isUnitUnconcealed(s: MatchState, unit: Unit, viewerTeam: Team) {
-  if (unit.team === viewerTeam || unit.kind !== 'hero' || (unit.revealedUntil ?? -999) > s.time) return true;
+  if (unit.team === viewerTeam || unit.kind !== 'hero' || hasStatus(unit,'revealed',s.time)) return true;
+  if (hasStatus(unit,'stealth',s.time)) return false;
+  if((unit.revealedUntil??-999)>s.time)return true;
   return !bushAt(unit);
 }
 export function isUnitVisibleToTeam(s: MatchState, unit: Unit, viewerTeam: Team) {
@@ -26,6 +29,7 @@ export function isUnitVisibleToTeam(s: MatchState, unit: Unit, viewerTeam: Team)
 }
 /** Creeps/towers fight locally even when their owner hero cannot see that part of the map. */
 export function isUnitTargetableBy(s: MatchState, target: Unit, observer: Unit) {
+  if(hasStatus(target,'untargetable',s.time))return false;
   return observer.kind === 'hero' ? isUnitVisibleToTeam(s, target, observer.team) : isUnitUnconcealed(s, target, observer.team);
 }
 function segmentHitsWater(a: Point, b: Point) {
@@ -58,15 +62,15 @@ function walkingDestination(from: Point, target: Point): Point {
   return { x: left < right || (left === right && from.x <= TERRAIN.river.minX) ? TERRAIN.river.minX : TERRAIN.river.maxX, y: p.y };
 }
 
-export function createMatch(choices: [HeroKind, HeroKind] = ['knight', 'mage'], bots: Team[] = []): MatchState {
+export function createMatch(choices: [HeroKind, HeroKind] = ['dain', 'sylra'], bots: Team[] = []): MatchState {
   const s: MatchState = { time: 0, status: 'playing', winner: null, units: [], effects: [], projectiles: [], wave: 0, nextWave: 3, log: ['战场已开启。摧毁防御塔后，攻击敌方基地。'], sequence: 0 };
   for (const team of [0, 1] as Team[]) {
-    const heroKind = choices[team] === 'mage' ? 'mage' : 'knight';
+    const heroKind = HERO_IDS.includes(choices[team]) ? choices[team] : 'dain';
     const data = HEROES[heroKind];
     s.units.push({ id: `hero-${team}`, kind: 'hero', team, name: data.name, heroKind, x: spawnX(team), y: WORLD.laneY,
       hp: data.hp, maxHp: data.hp, damage: data.damage, range: data.range, speed: data.speed, attackCd: data.attackCd,
       attackTimer: 0, targetId: null, moveTarget: null, gold: RULES.startingGold, lastHits: 0, kills: 0, deaths: 0,
-      items: [], cooldowns: [0, 0, 0, 0], level: 1, xp: 0, skillPoints: 1, skillRanks: [0, 0, 0, 0], potions: 0, lastCombatAt: -999, brushId: null, revealedUntil: -999, summonerCooldowns: { heal: 0, flash: 0 }, mana: data.mana, maxMana: data.mana, respawnAt: 0, shield: 0, bot: bots.includes(team) });
+      items: [], cooldowns: [0, 0, 0, 0], level: 1, xp: 0, skillPoints: 1, skillRanks: [0, 0, 0, 0], potions: 0, lastCombatAt: -999, brushId: null, revealedUntil: -999, summonerCooldowns: { heal: 0, flash: 0 }, mana: data.mana, maxMana: data.mana, respawnAt: 0, shield: 0, bot: bots.includes(team), armor:SOURCE_HEROES[heroKind].base.armor,mr:SOURCE_HEROES[heroKind].base.mr,ap:0,radius:SOURCE_HEROES[heroKind].base.radius*SOURCE_UNIT,hpRegen:SOURCE_HEROES[heroKind].base.hpRegen,manaRegen:SOURCE_HEROES[heroKind].base.manaRegen,passiveStacks:0,statuses:[],recentDamagers:[] });
     s.units.push({ id: `tower-${team}`, kind: 'tower', team, name: '防御塔', x: WORLD.towerX[team], y: WORLD.laneY,
       hp: 1750, maxHp: 1750, damage: 100, range: RULES.towerRange, speed: 0, attackCd: 1.1, attackTimer: 0, targetId: null, moveTarget: null, level: 0, xp: 0, skillPoints: 0, skillRanks: [], potions: 0, lastCombatAt: -999 });
     s.units.push({ id: `base-${team}`, kind: 'base', team, name: '基地', x: WORLD.baseX[team], y: WORLD.laneY,
@@ -88,22 +92,21 @@ function grantXp(s: MatchState, hero: Unit, amount: number) {
   hero.xp += amount;
   while (hero.level < 10 && hero.xp >= xpForNextLevel(hero.level)) {
     hero.xp -= xpForNextLevel(hero.level); hero.level++; hero.skillPoints++;
-    hero.maxHp += 80; if (living(hero)) hero.hp += 80;
-    hero.maxMana! += 25; hero.mana! += 25; hero.damage += 5;
+    recalcSourceHero(hero);
     effect(s, 'heal', hero.team, hero, { text: `升级 ${hero.level}` }, 1.1);
   }
   if (hero.level === 10) hero.xp = 0;
 }
-function hurt(s: MatchState, attacker: Unit, target: Unit, amount: number) {
-  if (s.status !== 'playing' || !living(target) || target.team === attacker.team || protectedBase(s, target)) return;
+function hurt(s: MatchState, attacker: Unit, target: Unit, amount: number, dtype='physical', via='other') {
+  if (s.status !== 'playing' || !living(target) || target.team === attacker.team || protectedBase(s, target) || hasStatus(target,'untargetable',s.time)) return;
   if (amount > 0) for (const u of [attacker, target]) if (u.kind === 'hero') {
     u.lastCombatAt = s.time;
     if (u.potionEffect) u.potionEffect.potency = .2;
   }
   if (amount > 0 && target.kind === 'hero') target.revealedUntil = s.time + 3;
-  const absorbed = Math.min(target.shield ?? 0, amount);
-  target.shield = (target.shield ?? 0) - absorbed;
-  target.hp = Math.max(0, target.hp - Math.max(0, amount - absorbed));
+  const actual = mitigateSourceDamage(s,attacker,target,amount,dtype,via,combatHooks);
+  if(actual>0&&attacker.kind==='hero'&&target.kind==='hero') {target.recentDamagers??=[];const record=target.recentDamagers.find(r=>r.id===attacker.id);if(record)record.at=s.time;else target.recentDamagers.push({id:attacker.id,at:s.time});}
+  target.hp = Math.max(0,target.hp-actual);
   if (attacker.kind === 'hero' && target.kind === 'hero') {
     const tower = s.units.find(u => u.kind === 'tower' && u.team === target.team && living(u));
     if (tower && distance(tower, attacker) <= tower.range) { tower.targetId = attacker.id; tower.aggroUntil = s.time + 3; }
@@ -115,11 +118,14 @@ function hurt(s: MatchState, attacker: Unit, target: Unit, amount: number) {
   }
   effect(s, 'death', target.team, target, { radius: target.kind === 'hero' ? 60 : 30 }, .8);
   if (target.kind === 'hero') {
+    onSourceTakedown(s,target);
+    target.statuses=[];target.activeDash=undefined;target.pendingSpell=undefined;target.pendingAttack=undefined;target.recastArmed=undefined;
     target.deaths!++; target.respawnAt = s.time + RULES.respawnSeconds;
     target.moveTarget = null; target.targetId = null; target.orderedTargetId = null; target.attackMoveTarget = null; target.shield = 0;
     delete target.potionEffect;
-    const killer = attacker.kind === 'hero' ? attacker : getHero(s, attacker.team);
-    if (attacker.kind === 'hero') { killer.kills!++; killer.gold! += 220; }
+    const recent=target.recentDamagers?.filter(r=>s.time-r.at<=10).sort((a,b)=>b.at-a.at)[0];
+    const killer=attacker.kind==='hero'?attacker:recent?s.units.find(u=>u.id===recent.id):undefined;
+    if(killer?.kind==='hero'){killer.kills!++;killer.gold!+=220;}
     log(s, `${target.team === 0 ? '蓝方' : '红方'}${target.name}阵亡，${RULES.respawnSeconds} 秒后复活。`);
   } else if (target.kind === 'melee' || target.kind === 'ranged') {
     if (attacker.kind === 'hero') {
@@ -136,78 +142,11 @@ function hurt(s: MatchState, attacker: Unit, target: Unit, amount: number) {
   }
 }
 
-function cast(s: MatchState, hero: Unit, slot: SkillSlot, point: Point, targetId?: string): { ok: boolean; error?: string } {
-  const data = HEROES[hero.heroKind!].skills[slot];
-  const rank = hero.skillRanks[slot];
-  if (!rank) return { ok: false, error: '请先学习这个技能' };
-  if (hero.cooldowns![slot] > 0) return { ok: false, error: '技能还在冷却' };
-  if (hero.mana! < data.mana) return { ok: false, error: '法力不足' };
-  const lockedTarget = targetId ? s.units.find(u => u.id === targetId) : undefined;
-  if (data.targeting === 'unit') {
-    if (!lockedTarget || !living(lockedTarget) || lockedTarget.team === hero.team || !combatant(lockedTarget) || !isUnitVisibleToTeam(s, lockedTarget, hero.team)) return { ok: false, error: '请将鼠标指向可见的敌方英雄或小兵' };
-    if (distance(hero, lockedTarget) > data.range) return { ok: false, error: '目标超出技能距离' };
-  }
-  hero.mana! -= data.mana;
-  hero.cooldowns![slot] = slot === 3 ? (hero.heroKind === 'knight' ? (rank === 1 ? 65 : 50) : (rank === 1 ? 70 : 55)) : data.cooldown * (1 - .1 * (rank - 1));
-  const d = distance(hero, point);
-  const dx = d < .01 ? (hero.team === 0 ? 1 : -1) : (point.x - hero.x) / d;
-  const dy = d < .01 ? 0 : (point.y - hero.y) / d;
-  const itemScale = 1 + hero.items!.filter(id => id === 'focus').length * .2;
-  const scale = itemScale * (1 + .25 * (rank - 1));
-  const enemies = s.units.filter(u => u.team !== hero.team && living(u));
-  if (slot === 3) {
-    if (hero.heroKind === 'knight') {
-      const target = lockedTarget!, from = { x: hero.x, y: hero.y }, td = distance(hero, target);
-      const stop = Math.min(65, td), ux = td > .01 ? (target.x - hero.x) / td : 1, uy = td > .01 ? (target.y - hero.y) / td : 0;
-      const p = displacementEndpoint(hero, { x: target.x - ux * stop, y: target.y - uy * stop }, data.range);
-      hero.x = p.x; hero.y = p.y; hero.moveTarget = null; hero.attackMoveTarget = null; hero.targetId = target.id; hero.orderedTargetId = target.id;
-      effect(s, 'dash', hero.team, from, { toX: p.x, toY: p.y, radius: 100, sourceId: hero.id }, .55);
-      effect(s, 'slash', hero.team, hero, { toX: target.x, toY: target.y, radius: 140 }, .6);
-      hurt(s, hero, target, ((rank === 1 ? 260 : 380) + (target.maxHp - target.hp) * .15) * itemScale);
-    } else {
-      const p = position({ x: hero.x + dx * Math.min(d, 850), y: hero.y + dy * Math.min(d, 850) });
-      s.projectiles.push({ id: `ultimate-${++s.sequence}`, kind: 'nova', ownerId: hero.id, team: hero.team,
-        x: p.x, y: p.y, startX: p.x, startY: p.y, dirX: 0, dirY: 0, speed: 0, range: 0,
-        radius: 260, damage: (rank === 1 ? 300 : 440) * itemScale, activateAt: s.time + 1, hitIds: [] });
-      effect(s, 'nova', hero.team, p, { radius: 260, text: '预警' }, 1);
-    }
-    return { ok: true };
-  }
-  if (hero.heroKind === 'knight') {
-    if (slot === 0) {
-      effect(s, 'slash', hero.team, hero, { toX: lockedTarget!.x, toY: lockedTarget!.y, radius: 170 });
-      hurt(s, hero, lockedTarget!, 145 * scale);
-    } else if (slot === 1) {
-      hero.shield = 230 + (rank - 1) * 60 + (hero.items!.includes('guard') ? 70 : 0); hero.buffUntil = s.time + 4;
-      effect(s, 'shield', hero.team, hero, { radius: 55 }, .65);
-    } else {
-      const from = { x: hero.x, y: hero.y };
-      const p = displacementEndpoint(hero, point, 230);
-      hero.x = p.x; hero.y = p.y; hero.moveTarget = null; hero.attackMoveTarget = null; hero.targetId = null; hero.orderedTargetId = null;
-      effect(s, 'dash', hero.team, from, { toX: p.x, toY: p.y, radius: 100, sourceId: hero.id });
-      for (const u of enemies) if (distance(hero, u) < 110) hurt(s, hero, u, 100 * scale);
-    }
-  } else if (slot === 0) {
-    s.projectiles.push({ id: `projectile-${++s.sequence}`, kind: 'bolt', ownerId: hero.id, team: hero.team,
-      x: hero.x, y: hero.y, startX: hero.x, startY: hero.y, dirX: dx, dirY: dy,
-      speed: 700, range: 650, radius: 30, damage: 125 * scale, hitIds: [] });
-  } else if (slot === 1) {
-    const p = position({ x: hero.x + dx * Math.min(d, 600), y: hero.y + dy * Math.min(d, 600) });
-    s.projectiles.push({ id: `hazard-${++s.sequence}`, kind: 'nova', ownerId: hero.id, team: hero.team,
-      x: p.x, y: p.y, startX: p.x, startY: p.y, dirX: 0, dirY: 0, speed: 0, range: 0,
-      radius: 135, damage: 100 * scale, activateAt: s.time + .65, slowSeconds: 2, hitIds: [] });
-    effect(s, 'nova', hero.team, p, { radius: 135, text: '预警' }, .65);
-  } else {
-    const from = { x: hero.x, y: hero.y };
-    const p = displacementEndpoint(hero, point, 210);
-    const healing = 80 + (rank - 1) * 30;
-    hero.x = p.x; hero.y = p.y; hero.moveTarget = null; hero.attackMoveTarget = null; hero.targetId = null; hero.orderedTargetId = null; hero.hp = Math.min(hero.maxHp, hero.hp + healing);
-    effect(s, 'dash', hero.team, from, { toX: p.x, toY: p.y, sourceId: hero.id }, .6);
-    effect(s, 'heal', hero.team, hero, { text: `+${healing}` }, .8);
-  }
-  return { ok: true };
+const combatHooks = { hurt, effect, endpoint: displacementEndpoint, visible: isUnitVisibleToTeam };
+export function recalcSourceHero(hero:Unit){if(!hero.heroKind)return;const source=SOURCE_HEROES[hero.heroKind],items=hero.items!.map(id=>ITEMS.find(i=>i.id===id)).filter(Boolean);const sum=(key:string)=>items.reduce((n,i)=>n+((i as any)[key]??0),0),level=hero.level-1;
+  const hp=source.base.hp+source.growth.hp*level+sum('hp'),mana=source.base.mana+source.growth.mana*level+sum('mana');if(living(hero))hero.hp=Math.min(hp,hero.hp+Math.max(0,hp-hero.maxHp));hero.mana=Math.min(mana,hero.mana!+Math.max(0,mana-hero.maxMana!));hero.maxHp=hp;hero.maxMana=mana;
+  hero.damage=source.base.ad+source.growth.ad*level+sum('damage');hero.ap=sum('ap');hero.armor=source.base.armor+source.growth.armor*level+sum('armor');hero.mr=source.base.mr+source.growth.mr*level+sum('mr');hero.speed=source.base.moveSpeed*SOURCE_UNIT+sum('speed');hero.attackCd=1/(source.base.attackSpeed*(1+sum('attackSpeedPct')));
 }
-
 export function applyCommand(s: MatchState, team: Team, command: Command): { ok: boolean; error?: string } {
   if (team !== 0 && team !== 1) return { ok: false, error: '队伍无效' };
   if (s.status !== 'playing') return { ok: false, error: '对局已经结束' };
@@ -215,11 +154,7 @@ export function applyCommand(s: MatchState, team: Team, command: Command): { ok:
   if (!command || typeof command !== 'object') return { ok: false, error: '操作无效' };
   if (command.type === 'upgrade') {
     if (![0, 1, 2, 3].includes(command.slot)) return { ok: false, error: '技能无效' };
-    if (hero.skillPoints <= 0) return { ok: false, error: '没有可用技能点' };
-    const data = HEROES[hero.heroKind!].skills[command.slot], rank = hero.skillRanks[command.slot];
-    if (rank >= data.maxRank) return { ok: false, error: '技能已达最高等级' };
-    const requiredLevel = command.slot === 3 && rank === 1 ? 8 : data.unlockLevel;
-    if (hero.level < requiredLevel) return { ok: false, error: `${requiredLevel} 级才能升级此技能` };
+    if (!canUpgradeSkill(hero,command.slot)) return {ok:false,error:'技能点、等级或技能上限不满足'};
     hero.skillPoints--; hero.skillRanks[command.slot]++;
     return { ok: true };
   }
@@ -232,14 +167,11 @@ export function applyCommand(s: MatchState, team: Team, command: Command): { ok:
     hero.gold! -= item.cost;
     if (item.kind === 'consumable') { hero.potions++; return { ok: true }; }
     hero.items!.push(item.id);
-    hero.damage += item.damage ?? 0; hero.maxHp += item.hp ?? 0;
-    if (living(hero)) hero.hp = Math.min(hero.maxHp, hero.hp + (item.hp ?? 0));
-    hero.speed += item.speed ?? 0; hero.maxMana! += item.mana ?? 0;
-    hero.mana! = Math.min(hero.maxMana!, hero.mana! + (item.mana ?? 0));
-    hero.attackCd = Math.max(.3, hero.attackCd * (1 - (item.haste ?? 0)));
+    recalcSourceHero(hero);
     return { ok: true };
   }
   if (!living(hero)) return { ok: false, error: '正在等待复活' };
+  if(hasStatus(hero,'stun',s.time)&&command.type!=='stop')return{ok:false,error:'眩晕期间无法行动'};
   if (command.type === 'usePotion') {
     if (hero.potions <= 0) return { ok: false, error: '没有恢复药水，请打开商店购买' };
     if (hero.potionEffect) return { ok: false, error: '药水效果仍在持续' };
@@ -251,6 +183,7 @@ export function applyCommand(s: MatchState, team: Team, command: Command): { ok:
     return { ok: true };
   }
   if (command.type === 'summoner') {
+    if(command.slot==='flash'&&hasStatus(hero,'root',s.time))return{ok:false,error:'禁锢期间无法位移'};
     if (command.slot !== 'heal' && command.slot !== 'flash') return { ok: false, error: '召唤师技能无效' };
     if (!Number.isFinite(command.x) || !Number.isFinite(command.y)) return { ok: false, error: '目标位置无效' };
     hero.summonerCooldowns ??= { heal: 0, flash: 0 };
@@ -262,24 +195,26 @@ export function applyCommand(s: MatchState, team: Team, command: Command): { ok:
     } else {
       const from = { x: hero.x, y: hero.y }, p = displacementEndpoint(hero, command, SUMMONERS.flash.range);
       hero.x = p.x; hero.y = p.y; hero.moveTarget = null; hero.attackMoveTarget = null; hero.targetId = null; hero.orderedTargetId = null;
+      if(hero.pendingSpell?.slot===hero.recastArmed?.slot)hero.recastArmed=undefined;
+      hero.activeDash=undefined;hero.pendingSpell=undefined;hero.pendingAttack=undefined;
       effect(s, 'dash', team, from, { toX: p.x, toY: p.y, sourceId: hero.id }, .55);
     }
     hero.summonerCooldowns[command.slot] = SUMMONERS[command.slot].cooldown;
     return { ok: true };
   }
-  if (command.type === 'stop') { hero.moveTarget = null; hero.attackMoveTarget = null; hero.targetId = null; hero.orderedTargetId = null; return { ok: true }; }
+  if (command.type === 'stop') { hero.pendingAttack=undefined; hero.moveTarget = null; hero.attackMoveTarget = null; hero.targetId = null; hero.orderedTargetId = null; return { ok: true }; }
   if (command.type === 'attack') {
     const target = s.units.find(u => u.id === command.targetId);
-    if (!target || !living(target) || target.team === team || !isUnitVisibleToTeam(s, target, team)) return { ok: false, error: '请选择可见的敌方目标' };
+    if (!target || !living(target) || target.team === team || !isUnitTargetableBy(s, target, hero)) return { ok: false, error: '请选择可见且可选中的敌方目标' };
     if (protectedBase(s, target)) return { ok: false, error: '先摧毁敌方防御塔' };
     hero.targetId = target.id; hero.orderedTargetId = target.id; hero.moveTarget = null; hero.attackMoveTarget = null; return { ok: true };
   }
   if (command.type === 'move' || command.type === 'attackMove' || command.type === 'skill') {
     if (!Number.isFinite(command.x) || !Number.isFinite(command.y)) return { ok: false, error: '目标位置无效' };
-    if (command.type === 'move') { hero.moveTarget = walkingDestination(hero, command); hero.attackMoveTarget = null; hero.targetId = null; hero.orderedTargetId = null; return { ok: true }; }
-    if (command.type === 'attackMove') { hero.attackMoveTarget = walkingDestination(hero, command); hero.moveTarget = null; hero.targetId = null; hero.orderedTargetId = null; return { ok: true }; }
+    if (command.type === 'move') { hero.pendingAttack=undefined;hero.attackTimer=0;hero.moveTarget = walkingDestination(hero, command); hero.attackMoveTarget = null; hero.targetId = null; hero.orderedTargetId = null; return { ok: true }; }
+    if (command.type === 'attackMove') { hero.pendingAttack=undefined;hero.attackTimer=0;hero.attackMoveTarget = walkingDestination(hero, command); hero.moveTarget = null; hero.targetId = null; hero.orderedTargetId = null; return { ok: true }; }
     if (![0, 1, 2, 3].includes(command.slot)) return { ok: false, error: '技能无效' };
-    return cast(s, hero, command.slot, position(command), command.targetId);
+    return castSourceSkill(s,hero,command.slot,position(command),combatHooks);
   }
   return { ok: false, error: '操作无效' };
 }
@@ -300,6 +235,7 @@ function spawnWave(s: MatchState) {
   }
 }
 function moveToward(u: Unit, p: Point, dt: number, stopDistance = 0, time = 0) {
+  if(hasStatus(u,'root',time)||hasStatus(u,'stun',time)||u.activeDash||u.pendingAttack||u.pendingSpell)return;
   let waypoint = walkingDestination(u, p);
   if (segmentHitsWater(u, waypoint)) {
     // Approach the bridge on the current bank, cross its center, then resume the original order.
@@ -313,7 +249,7 @@ function moveToward(u: Unit, p: Point, dt: number, stopDistance = 0, time = 0) {
   }
   const d = distance(u, waypoint);
   if (d <= stopDistance + .01) return;
-  const step = Math.min(d - stopDistance, u.speed * (u.slowUntil && u.slowUntil > time ? .5 : 1) * dt);
+  const step = Math.min(d - stopDistance, u.speed * speedMultiplier(u,time) * dt);
   let next = position({ x: u.x + (waypoint.x - u.x) / d * step, y: u.y + (waypoint.y - u.y) / d * step });
   if (segmentHitsWater(u, next)) {
     let low = 0, high = 1;
@@ -336,21 +272,17 @@ function acquire(s: MatchState, u: Unit): Unit | undefined {
     return closest(u, inRange.filter(v => v.kind !== 'hero')) ?? closest(u, inRange);
   }
   if (u.kind === 'base') return;
-  const scanRange = u.kind === 'hero' ? u.range : 310;
-  const nearby = enemies.filter(v => distance(u, v) <= scanRange);
+  const nearby = enemies.filter(v => distance(u, v) <= (u.kind==='hero'?u.range+bodyRadius(u)+bodyRadius(v):310));
   // Troops fight enemy troops before heroes and structures, keeping waves readable.
   if (u.kind !== 'hero') return closest(u, nearby.filter(v => v.kind === 'melee' || v.kind === 'ranged')) ?? closest(u, nearby);
   return closest(u, nearby);
 }
 function botThink(s: MatchState, hero: Unit) {
   if (!living(hero)) return;
-  while (hero.skillPoints > 0) {
-    const ultimateReady = hero.skillRanks[3] < 2 && hero.level >= (hero.skillRanks[3] === 0 ? 4 : 8);
-    const slot: SkillSlot | undefined = ultimateReady ? 3 : hero.skillRanks[0] < 3 ? 0 : hero.skillRanks[1] < 3 ? 1 : hero.skillRanks[2] < 3 ? 2 : undefined;
-    if (slot === undefined || !applyCommand(s, hero.team, { type: 'upgrade', slot }).ok) break;
-  }
+  while(hero.skillPoints>0){const unlearned=([0,1,2] as SkillSlot[]).filter(slot=>!hero.skillRanks[slot]);const slot=([3,...unlearned,0,1,2] as SkillSlot[]).find(slot=>canUpgradeSkill(hero,slot));if(slot===undefined)break;applyCommand(s,hero.team,{type:'upgrade',slot});}
   const opponent = getHero(s, hero.team === 0 ? 1 : 0);
   const opponentVisible = isUnitVisibleToTeam(s, opponent, hero.team);
+  if(hero.recastArmed&&hero.recastArmed.until>s.time&&(hero.hp<hero.maxHp*.45||!living(opponent))){applyCommand(s,hero.team,{type:'skill',slot:hero.recastArmed.slot,x:hero.x,y:hero.y});return;}
   if (hero.hp < hero.maxHp * .55 && !hero.summonerCooldowns?.heal) {
     applyCommand(s, hero.team, { type: 'summoner', slot: 'heal', x: hero.x, y: hero.y });
   }
@@ -360,7 +292,7 @@ function botThink(s: MatchState, hero: Unit) {
   }
   if (hero.hp < hero.maxHp * .25) {
     applyCommand(s, hero.team, { type: 'move', x: spawnX(hero.team), y: WORLD.laneY });
-    if (hero.heroKind === 'knight') applyCommand(s, hero.team, { type: 'skill', slot: 1, x: hero.x, y: hero.y });
+    if (hero.heroKind === 'fenn') applyCommand(s, hero.team, { type: 'skill', slot: 2, x: hero.x, y: hero.y });
     return;
   }
   if (hero.gold! >= 300 && hero.items!.length < 6) {
@@ -387,15 +319,20 @@ function botThink(s: MatchState, hero: Unit) {
   }
   if (isUnitVisibleToTeam(s, target, hero.team)) applyCommand(s, hero.team, { type: 'attack', targetId: target.id });
   else applyCommand(s, hero.team, { type: 'move', x: target.x, y: target.y });
-  if (opponentVisible && living(opponent) && distance(hero, opponent) < (hero.heroKind === 'mage' ? 430 : 160)) {
-    applyCommand(s, hero.team, { type: 'skill', slot: 0, x: opponent.x, y: opponent.y, targetId: opponent.id });
-    applyCommand(s, hero.team, { type: 'skill', slot: 1, x: opponent.x, y: opponent.y });
-  }
-  if (opponentVisible && hero.heroKind === 'knight' && living(opponent) && distance(hero, opponent) > 130 && distance(hero, opponent) < 330) {
-    applyCommand(s, hero.team, { type: 'skill', slot: 2, x: opponent.x, y: opponent.y });
-  }
-  if (opponentVisible && hero.skillRanks[3] > 0 && living(opponent) && distance(hero, opponent) < HEROES[hero.heroKind!].skills[3].range) {
-    applyCommand(s, hero.team, { type: 'skill', slot: 3, x: opponent.x, y: opponent.y, targetId: opponent.id });
+  if(opponentVisible&&living(opponent)&&!hero.activeDash&&!hero.pendingSpell){
+    for(const slot of [3,2,1,0] as SkillSlot[]){
+      if(!hero.skillRanks[slot]||hero.cooldowns![slot]>0||hero.recastArmed?.slot===slot)continue;
+      const skill=skillForRank(hero.heroKind!,slot,hero.skillRanks[slot]),spec=skill.spec;
+      let aim:Point=opponent;const gap=distance(hero,opponent);
+      if(spec.toAlly){const ally=closest(opponent,s.units.filter(u=>u.team===hero.team&&u.id!==hero.id&&living(u)&&combatant(u)&&distance(u,hero)<=skill.range+bodyRadius(u)&&distance(u,opponent)<(spec.landRadius??0)*SOURCE_UNIT+bodyRadius(opponent)));if(!ally)continue;aim=ally;
+      }else if(spec.kind==='self_or_ally'){
+        if(spec.effects.some((e:any)=>e.kind==='stealth')&&hero.hp>hero.maxHp*.65)continue;
+        if(gap>Math.max(hero.range+100,350))continue;aim=hero;
+      }else if(spec.kind==='dash'&&spec.selfEffects?.some((e:any)=>e.kind==='buff'&&e.asPct)){
+        const direction=gap<hero.range*.7?-1:1,d=Math.max(.01,gap);aim={x:hero.x+(opponent.x-hero.x)/d*skill.range*direction,y:hero.y+(opponent.y-hero.y)/d*skill.range*direction};
+      }else if(gap>skill.range+bodyRadius(opponent))continue;
+      if(applyCommand(s,hero.team,{type:'skill',slot,x:aim.x,y:aim.y}).ok)break;
+    }
   }
 }
 
@@ -421,7 +358,8 @@ export function stepMatch(s: MatchState, dt: number) {
       }
       continue;
     }
-    hero.mana = Math.min(hero.maxMana!, hero.mana! + 7 * dt);
+    hero.mana = Math.min(hero.maxMana!, hero.mana! + (hero.manaRegen??0) * dt);
+    hero.hp = Math.min(hero.maxHp,hero.hp+(hero.hpRegen??0)*dt);
     if (hero.potionEffect) {
       const active = hero.potionEffect, tick = Math.min(dt, active.remaining);
       hero.hp = Math.min(hero.maxHp, hero.hp + active.hpPerSecond * active.potency * tick);
@@ -429,12 +367,14 @@ export function stepMatch(s: MatchState, dt: number) {
       active.remaining = Math.max(0, active.remaining - tick);
       if (active.remaining <= 1e-8) delete hero.potionEffect;
     }
-    if (hero.buffUntil && s.time > hero.buffUntil) hero.shield = 0;
+
     if (hero.bot && Math.floor(oldTime / .6) !== Math.floor(s.time / .6)) botThink(s, hero);
   }
+  stepSourceCombat(s,dt,combatHooks);
   for (const u of s.units) {
     if (!living(u) || u.kind === 'base' || s.status !== 'playing') continue;
     u.attackTimer = Math.max(0, u.attackTimer - dt);
+    if(u.activeDash||u.pendingSpell||u.pendingAttack||hasStatus(u,'stun',s.time))continue;
     let target = u.targetId ? s.units.find(v => v.id === u.targetId && v.team !== u.team && living(v) && !protectedBase(s, v) && isUnitTargetableBy(s, v, u)) : undefined;
     if (u.kind === 'tower') target = acquire(s, u);
     else if (u.kind !== 'hero') {
@@ -444,9 +384,9 @@ export function stepMatch(s: MatchState, dt: number) {
       if (distance(u, u.moveTarget) < 1) u.moveTarget = null;
       continue;
     } else if (u.attackMoveTarget) {
-      if (target && distance(u, target) > u.range + 120) target = undefined;
+      if (target && distance(u, target) > u.range + bodyRadius(u)+bodyRadius(target) + 120) target = undefined;
       if (!target) {
-        const nearby = s.units.filter(v => v.team !== u.team && living(v) && !protectedBase(s, v) && distance(u, v) <= u.range + 90 && isUnitVisibleToTeam(s, v, u.team));
+        const nearby = s.units.filter(v => v.team !== u.team && living(v) && !protectedBase(s, v) && distance(u, v) <= u.range + bodyRadius(u)+bodyRadius(v) + 90 && isUnitVisibleToTeam(s, v, u.team));
         target = closest(u, nearby.filter(combatant)) ?? closest(u, nearby);
       }
       if (!target) {
@@ -457,60 +397,26 @@ export function stepMatch(s: MatchState, dt: number) {
       }
     } else {
       if (u.orderedTargetId && target?.id !== u.orderedTargetId) u.orderedTargetId = null;
-      if (target && !u.orderedTargetId && distance(u, target) > u.range + 1) target = undefined;
+      if (target && !u.orderedTargetId && distance(u, target) > u.range + bodyRadius(u)+bodyRadius(target) + 1) target = undefined;
       if (!target) target = acquire(s, u);
     }
     u.targetId = target?.id ?? null;
     if (target) {
-      const effectiveRange = u.range + (target.kind === 'tower' ? 30 : target.kind === 'base' ? 45 : 0);
+      const effectiveRange = u.range + bodyRadius(u)+bodyRadius(target);
       if (distance(u, target) <= effectiveRange + 1) {
         if (u.attackTimer <= 0) {
-          u.attackTimer = u.attackCd;
+          const cadence=attackCadence(u,s.time);u.attackTimer=1/cadence;breakSkillStealth(u);u.pendingAttack={targetId:target.id,resolveAt:s.time+Math.min(u.kind==='hero'?.35:.15,(u.kind==='hero'?.3:.15)/Math.max(.1,cadence)),start:{x:u.x,y:u.y}};
           effect(s, 'attack', u.team, u, { toX: target.x, toY: target.y, radius: u.range > 100 ? 4 : 18 }, .24);
-          hurt(s, u, target, u.damage);
+
         }
       } else if (mobile(u)) moveToward(u, target, dt, effectiveRange, s.time);
     } else if (u.kind === 'melee' || u.kind === 'ranged') {
       moveToward(u, { x: WORLD.baseX[u.team === 0 ? 1 : 0], y: WORLD.laneY + (Number(u.id.slice(-1)) % 2 ? 18 : -18) }, dt, 0, s.time);
     }
   }
-  updateProjectiles(s, dt);
+
   for (const hero of s.units.filter(u => u.kind === 'hero')) hero.brushId = bushAt(hero)?.id ?? null;
   // Only dead troops are removed; dead heroes and structures remain for respawn/rubble views.
   s.units = s.units.filter(u => living(u) || u.kind === 'hero' || u.kind === 'tower' || u.kind === 'base');
 }
 
-function distanceToSegment(p: Point, a: Point, b: Point) {
-  const dx = b.x - a.x, dy = b.y - a.y, squared = dx * dx + dy * dy;
-  const t = squared === 0 ? 0 : clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / squared, 0, 1);
-  return distance(p, { x: a.x + dx * t, y: a.y + dy * t });
-}
-function updateProjectiles(s: MatchState, dt: number) {
-  if (s.status !== 'playing') return;
-  s.projectiles = s.projectiles.filter(p => {
-    const owner = s.units.find(u => u.id === p.ownerId);
-    if (!owner || s.status !== 'playing') return false;
-    const enemies = s.units.filter(u => u.team !== p.team && living(u));
-    if (p.kind === 'nova') {
-      if (s.time + 1e-8 < p.activateAt!) return true;
-      effect(s, 'nova', p.team, p, { radius: p.radius, text: '爆发' }, .35);
-      for (const u of enemies) if (distance(u, p) <= p.radius) {
-        const protectedTarget = protectedBase(s, u);
-        hurt(s, owner, u, p.damage);
-        if (!protectedTarget && p.slowSeconds) u.slowUntil = Math.max(u.slowUntil ?? 0, s.time + p.slowSeconds);
-      }
-      return false;
-    }
-    const from = { x: p.x, y: p.y }, traveled = Math.hypot(p.x - p.startX, p.y - p.startY);
-    const length = Math.min(p.speed * dt, Math.max(0, p.range - traveled));
-    p.x += p.dirX * length; p.y += p.dirY * length;
-    for (const u of enemies) {
-      if (p.hitIds.includes(u.id)) continue;
-      const bodyRadius = mobile(u) ? 20 : 45;
-      if (distanceToSegment(u, from, p) <= p.radius + bodyRadius) {
-        p.hitIds.push(u.id); hurt(s, owner, u, p.damage);
-      }
-    }
-    return traveled + length + 1e-8 < p.range;
-  });
-}

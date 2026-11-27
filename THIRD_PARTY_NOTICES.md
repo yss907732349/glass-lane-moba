@@ -15,7 +15,7 @@
 
 `public/assets/heroes/knight.png` 和 `mage.png` 是原始透明 16×16 精灵的兼容路径；`hero-*-sheet.png` 是在透明 32×32 网格中添加轻微上下移动、攻击位移及独立武器图层的衍生动作图。它们不是原包提供的完整方向动画。衍生素材也按 CC0-1.0 提供，生成说明和帧索引见 `public/assets/heroes.manifest.json`，可用 `prepare_kenney_assets.py` 重建。
 
-游戏角色名称、数值、技能逻辑和联机玩法为本项目实现，没有复制商业 MOBA 的角色立绘、模型、音效或游戏代码。
+四名英雄 Dain、Fenn、Ashvyn、Sylra 的基础属性、成长、技能定义和战斗机制，以及六件基础装备的数值与价格，改编自下述 MIT 开源项目 Claude of Legends。单线地图、等级压缩、房间联机、透明桌面表现及明确列出的适配规则由本项目整合实现。角色位图仍来自上述独立 CC0 素材。
 
 ## 开源项目调研
 
@@ -68,3 +68,33 @@ COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
+
+## Claude of Legends — hero gameplay and basic items
+
+Repository: https://github.com/killian01/claude-of-legends
+
+Pinned commit: 34fe718427d2726c92ed9063e694640e6d870013
+
+Selected champions: Dain, Fenn, Ashvyn, Sylra. Source snapshots and file hashes: third_party/claude-of-legends/SOURCE.json. Declared adaptations: docs/source-heroes.md.
+
+MIT License
+
+Copyright (c) 2026 Claude of Legends contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

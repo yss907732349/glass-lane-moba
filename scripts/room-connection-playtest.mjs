@@ -38,11 +38,12 @@ try{
   }
   const a=await client();
   await a.waitForFunction(()=>document.getElementById('connection').textContent.includes('重连')||document.getElementById('connection').textContent.includes('不可用'));
+  await a.locator('[data-hero="dain"]').click();
   await a.locator('#practice').click();await a.locator('#hud').waitFor({state:'visible'});
   await a.waitForFunction(()=>document.getElementById('clock')?.textContent!=='00:00');
   assert.equal(await a.locator('#server-url').inputValue(),localUrl);
   const localCreate=(await frames(a)).find(frame=>frame.direction==='sent'&&frame.message.type==='create');
-  assert.equal(serviceOrigin(localCreate.endpoint),localUrl);
+  assert.equal(serviceOrigin(localCreate.endpoint),localUrl);assert.equal(localCreate.message.protocol,'glass-lane-v2');assert.equal(localCreate.message.hero,'dain');
   passed.push('默认联机服务实际不可用时，练习通过独立本机服务开局');
   await snapshot(a,'local-practice');
 
@@ -50,18 +51,21 @@ try{
   const upgrades=remote.server.listeners('upgrade');remote.server.removeAllListeners('upgrade');
   remote.server.on('upgrade',(...args)=>setTimeout(()=>{for(const listener of upgrades)listener.apply(remote.server,args);},2000));
   await a.locator('#menu-button').click();await a.locator('#leave-match').click();await a.locator('#entry').waitFor({state:'visible'});
+  await a.locator('[data-hero="fenn"]').click();
   await a.locator('#name').fill('切换验证甲');await a.locator('#password').fill('room-test');
   assert.notEqual(await a.locator('#connection').textContent(),'房间服务已连接','create is requested before remote handshake completes');await a.locator('#create').click();
   await a.locator('#room-detail').waitFor({state:'visible'});
   const created=await waitMessage(a,'welcome','m.room.players[0].name==="切换验证甲"');
   const aFrames=await frames(a),multiplayerCreates=aFrames.filter(frame=>frame.direction==='sent'&&frame.message.type==='create'&&frame.message.name==='切换验证甲');
   assert.equal(multiplayerCreates.length,1);assert.equal(serviceOrigin(multiplayerCreates[0].endpoint),remoteUrl);
+  assert.equal(multiplayerCreates[0].message.protocol,'glass-lane-v2');assert.equal(multiplayerCreates[0].message.hero,'fenn');assert.equal(created.room.players[0].hero,'fenn');
   assert.equal(await a.locator('#server-url').inputValue(),remoteUrl);
   assert((await a.locator('#room-service-label').getAttribute('title')).includes(remoteUrl));
   passed.push('离开本机练习后立即创建联机房间，请求切回默认服务且只发送一次');
   await snapshot(a,'restored-online-room');
 
   const b=await client();
+  await b.locator('[data-hero="sylra"]').click();
   const formatted=`　${created.room.code.replace(/[0-9]/g,d=>String.fromCharCode(d.charCodeAt(0)+0xfee0))} `;
   await b.locator('#name').fill('切换验证乙');await b.locator('#password').fill('wrong-password');
   await b.locator('#room-code').evaluate((node,value)=>{const clipboardData=new DataTransfer();clipboardData.setData('text/plain',value);const event=new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData});const prevented=!node.dispatchEvent(event);if(!prevented){node.value=value.slice(0,node.maxLength<0?undefined:node.maxLength);node.dispatchEvent(new Event('input',{bubbles:true}));}},formatted);
@@ -69,6 +73,7 @@ try{
   await waitMessage(b,'error','/房间不存在或密码错误/.test(m.message)');
   const firstJoin=(await frames(b)).find(frame=>frame.direction==='sent'&&frame.message.type==='join');
   assert.equal(firstJoin.message.code,created.room.code,'fullwidth and surrounding whitespace normalize to six ASCII digits');
+  assert.equal(firstJoin.message.protocol,'glass-lane-v2');assert.equal(firstJoin.message.hero,'sylra');
   assert.equal(serviceOrigin(firstJoin.endpoint),remoteUrl);
   assert.equal(await b.locator('#entry').isVisible(),true);
   passed.push('粘贴带空白的全角房间号归一化；错误密码可在原界面改正');
@@ -84,6 +89,8 @@ try{
     assert(final.length>0);for(const frame of final)assert.equal(serviceOrigin(frame.endpoint),remoteUrl);
   }
   passed.push('修正密码后两位玩家在同一默认服务完成加入、准备与真实同步开局');
+  const aState=await waitMessage(a,'state','m.state.time>0'),bState=await waitMessage(b,'state','m.state.time>0');assert.equal(aState.state.units.find(u=>u.id==='hero-0').heroKind,'fenn');assert.equal(bState.state.units.find(u=>u.id==='hero-1').heroKind,'sylra');
+  passed.push('新版协议握手携带四英雄名单中的有效ID，真实房间使用Fenn与Sylra');
   await snapshot(a,'multiplayer');
   assert.deepEqual(errors,[]);
   const report={passed,errors,localUrl,remoteUrl,visibleWindows:false,verifiedAt:new Date().toISOString()};

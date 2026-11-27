@@ -1,3 +1,7 @@
+# 0.2.0 采用的角色玩法来源
+
+已实际移植 MIT 开源 Claude of Legends 的 Dain/Fenn/Ashvyn/Sylra 四名角色，固定提交和完整适配见 [source-heroes.md](source-heroes.md)。下文保留最初原型的调研记录，不代表0.2.0仍使用自拟英雄数值。
+
 # 单线 MOBA 开源调研与当前素材选择
 
 检查日期：2026-11-25。以下结论来自对应仓库的 README、许可文件及素材官方网站，并非只凭仓库标题判断。

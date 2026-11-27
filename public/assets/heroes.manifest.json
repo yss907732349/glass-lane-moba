@@ -23,16 +23,30 @@
     }
   },
   "heroes": {
-    "knight": {
-      "portrait": "/assets/hero-knight.png",
-      "sheet": "/assets/hero-knight-sheet.png",
-      "originalTile": 97,
+    "dain": {
+      "portrait": "/assets/hero-dain.png",
+      "sheet": "/assets/hero-dain-sheet.png",
+      "originalTile": 86,
       "originX": 0.5,
       "originY": 0.875
     },
-    "mage": {
-      "portrait": "/assets/hero-mage.png",
-      "sheet": "/assets/hero-mage-sheet.png",
+    "fenn": {
+      "portrait": "/assets/hero-fenn.png",
+      "sheet": "/assets/hero-fenn-sheet.png",
+      "originalTile": 96,
+      "originX": 0.5,
+      "originY": 0.875
+    },
+    "ashvyn": {
+      "portrait": "/assets/hero-ashvyn.png",
+      "sheet": "/assets/hero-ashvyn-sheet.png",
+      "originalTile": 112,
+      "originX": 0.5,
+      "originY": 0.875
+    },
+    "sylra": {
+      "portrait": "/assets/hero-sylra.png",
+      "sheet": "/assets/hero-sylra-sheet.png",
       "originalTile": 84,
       "originX": 0.5,
       "originY": 0.875

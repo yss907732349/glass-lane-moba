@@ -1,0 +1,144 @@
+{
+  "commit": "34fe718427d2726c92ed9063e694640e6d870013",
+  "files": [
+    {
+      "path": "LICENSE",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/LICENSE",
+      "sha256": "73c17f921c59461d18ea5514b07afaa2248798bc3e0a71d97b1164b81ffe5b24"
+    },
+    {
+      "path": "src/sim/content/champions/dain.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/content/champions/dain.ts",
+      "sha256": "65574f0bffe1b6d49897db2e51025eb5ca54b0575a35d317ca03684566076639"
+    },
+    {
+      "path": "src/sim/content/champions/fenn.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/content/champions/fenn.ts",
+      "sha256": "877836bc75ca95cd8f911af0f7d5755efc2e840e48a6fa7212071c1b6612ccf8"
+    },
+    {
+      "path": "src/sim/content/champions/ashvyn.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/content/champions/ashvyn.ts",
+      "sha256": "99c81211f153bb3a1aea3ff20759097ff08d10e6c253c8083a22144133ec9b57"
+    },
+    {
+      "path": "src/sim/content/champions/index.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/content/champions/index.ts",
+      "sha256": "6912dff39076ddabaea39b78093f108aee6f549f79c1d0bd098cc779ee194a73"
+    },
+    {
+      "path": "src/sim/stats.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/stats.ts",
+      "sha256": "dd0899de2399295f5596fbfc54af31bac5481522176f7430edd087a6bf69856f"
+    },
+    {
+      "path": "src/sim/combat/casting.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/combat/casting.ts",
+      "sha256": "2d8734f02d7263b4d1fa5e56ee3cf04931a11703e1d5a1371e38ba3465bd3ce9"
+    },
+    {
+      "path": "src/sim/combat/effects.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/combat/effects.ts",
+      "sha256": "24b5de432f910d7b858a97fbfcc590c5e50b01730b243209108282299db68273"
+    },
+    {
+      "path": "src/sim/combat/damage.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/combat/damage.ts",
+      "sha256": "363d6efae3d4d4f5e39f02145fe670d34f55da6d359dd22f480cf1da94fd4b8a"
+    },
+    {
+      "path": "src/sim/combat/auto_attack.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/combat/auto_attack.ts",
+      "sha256": "e485ffc4ab660e19586253c3f092f7a27c0f247f0abb926d58a2fd640006db0f"
+    },
+    {
+      "path": "src/sim/combat/ally_dash.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/combat/ally_dash.ts",
+      "sha256": "e9fc312894f07a31679286d0aa1124b2dd1494eb0207871e8929381d71b2a778"
+    },
+    {
+      "path": "src/sim/combat/dots.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/combat/dots.ts",
+      "sha256": "c097889341324ddec805049f3831693a09559085706442ffdda368c9e43b20d5"
+    },
+    {
+      "path": "src/sim/combat/shield_burst.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/combat/shield_burst.ts",
+      "sha256": "347ebb63574159fd86f47b4d26daf136d5a421bfdf009793ec445ed46e1a450d"
+    },
+    {
+      "path": "src/sim/combat/status.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/combat/status.ts",
+      "sha256": "9f4eff5a9ad3ba513b5003072c41647f88f94cb5ccf9abe4dd33c79edfc9acb2"
+    },
+    {
+      "path": "src/sim/dashes.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/dashes.ts",
+      "sha256": "6b53ca083b1dc29301da6a9c7311ea3f59062cce19fc72cd9c7a3e4896c2dd90"
+    },
+    {
+      "path": "src/sim/projectiles.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/projectiles.ts",
+      "sha256": "d5feb26e9450cbe5bccb1067f80ac17d3de47d11c5e37a6645c714dbf7d3cfb5"
+    },
+    {
+      "path": "src/sim/zones.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/zones.ts",
+      "sha256": "66f8e82f1a3e2bd2b0c4c659609e26a0e7145be17eef890778f814c5cf6f9490"
+    },
+    {
+      "path": "src/sim/passive_types.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/passive_types.ts",
+      "sha256": "5c41bcb9d7cf9d4fa63b57a58b7fe0c700278e88f2a652b7ff3f37745600bf16"
+    },
+    {
+      "path": "src/sim/passives.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/passives.ts",
+      "sha256": "f68b0f74bca718b2dddbe0e80a3176b63be50c00e697cf8a49aee254267b7736"
+    },
+    {
+      "path": "src/sim/unit.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/unit.ts",
+      "sha256": "289e270788e26d1b2e301a7ab044f8477ab835e863b25a0f013979309a9a98c8"
+    },
+    {
+      "path": "src/sim/types.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/types.ts",
+      "sha256": "a086bba0f2c369755d7464f25d176507d8830f69f22501b870ba1bcd04c69ed5"
+    },
+    {
+      "path": "src/sim/geo.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/geo.ts",
+      "sha256": "ccfe2ae995d75a32ad6119a47ac7b6c1100108f8b043afb0351490391e1c274a"
+    },
+    {
+      "path": "src/sim/vision.ts",
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/vision.ts",
+      "sha256": "4d01defb63b694488397467668fc850ace2a62d06395d25b1a7cb3f3d148b507"
+    },
+    {
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/content/champions/sylra.ts",
+      "path": "src/sim/content/champions/sylra.ts",
+      "sha256": "2f90a2bbb63ec84a3f2b9ab98a99edea1b2edcb1cbd40ef09bb2d7c9a4cdaa25"
+    },
+    {
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/sim.ts",
+      "sha256": "46dfe1454c1b6bbce1e31d99cd566f5f4471374c08f03b455f451ef7205685c5",
+      "path": "src/sim/sim.ts"
+    },
+    {
+      "upstreamUrl": "https://raw.githubusercontent.com/killian01/claude-of-legends/34fe718427d2726c92ed9063e694640e6d870013/src/sim/content/items.ts",
+      "path": "src/sim/content/items.ts",
+      "sha256": "8d01b276932bdceea1812c900f18e0215d3c0e872d79ab0a70539c93077b7ad9"
+    }
+  ],
+  "selectedChampions": [
+    "dain",
+    "fenn",
+    "ashvyn",
+    "sylra"
+  ],
+  "license": "MIT",
+  "repository": "https://github.com/killian01/claude-of-legends",
+  "retrieved": "2026-11-27"
+}

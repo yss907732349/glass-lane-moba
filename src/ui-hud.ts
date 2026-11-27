@@ -1,11 +1,12 @@
 import { HEROES, SUMMONERS } from './shared/data.ts';
 import type { Unit } from './shared/types.ts';
+import { HERO_PRESENTATION, skillName } from './hero-presentation.ts';
 
 /** The HUD has two reading rows: survival above, deliberate actions below. */
 export function hudMarkup(u: Unit, glyph: (kind: string) => string) {
-  const hero = HEROES[u.heroKind ?? 'knight'];
-  const icons = u.heroKind === 'knight' ? ['sword', 'shield', 'dash', 'slash'] : ['bolt', 'nova', 'dash', 'focus'];
-  const targeting = { unit: '选择敌方单位', direction: '选择方向', ground: '选择地面位置', self: '对自身释放' };
+  const hero = HEROES[u.heroKind ?? 'dain'];
+  const icons = HERO_PRESENTATION[u.heroKind??'dain'].icons;
+  const targeting = { unit: '选择敌方单位', direction: '选择方向', ground: '选择地面位置', self: '对自身释放', ally: '选择友方目标附近的位置' };
   return `
     <div class="status-strip hero-vitals">
       <div class="hero-badge" title="${hero.name}"><img src="/assets/heroes/${u.heroKind}.png" alt="${hero.name}"><span id="hero-level">Lv.1</span></div>
@@ -19,7 +20,7 @@ export function hudMarkup(u: Unit, glyph: (kind: string) => string) {
       <button id="attack-aim" class="attack-aim" title="A：显示普攻范围，左键攻击／攻击移动，右键取消"><kbd>A</kbd><span>攻击</span></button>
       <div class="ability-deck abilities">
         ${hero.skills.map((s, i) => `<div class="ability-wrap">
-          <button id="upgrade-${i}" class="skill-upgrade" data-upgrade="${i}" aria-label="升级 ${s.name}" title="学习／升级 ${s.key} ${s.name}，或 Ctrl+${s.key}" hidden>+</button>
+          <button id="upgrade-${i}" class="skill-upgrade" data-upgrade="${i}" aria-label="升级 ${skillName(u.heroKind??'dain',i)}" title="学习／升级 ${s.key} ${s.name}，或 Ctrl+${s.key}" hidden>+</button>
           <button id="ability-${i}" class="ability" data-skill="${i}" title="${s.name}：${s.description} ${targeting[s.targeting ?? 'direction']}；左键确认，右键取消。冷却 ${s.cooldown} 秒，消耗 ${s.mana} 法力。">
             <kbd>${s.key}</kbd><span class="skill-glyph">${glyph(icons[i])}</span><span id="cooldown-${i}" class="skill-cooldown" hidden></span><strong>${s.name}</strong><small>${s.mana}</small>
           </button>

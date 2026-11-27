@@ -1,7 +1,8 @@
 import './style.css';
 import { bootArena } from './arena.ts';
 import { hudMarkup } from './ui-hud.ts';
-import { HEROES, ITEMS, RULES, WORLD, TERRAIN, SUMMONERS, xpForNextLevel } from './shared/data.ts';
+import { HERO_PRESENTATION, skillName, numericSkillDetails } from './hero-presentation.ts';
+import { HEROES, HERO_IDS, skillForRank, canUpgradeSkill, ITEMS, RULES, WORLD, TERRAIN, SUMMONERS, xpForNextLevel } from './shared/data.ts';
 import { createMatch, stepMatch, isUnitVisibleToTeam } from './shared/simulation.ts';
 import type { Command, HeroKind, MatchState, Team, Unit } from './shared/types.ts';
 
@@ -22,7 +23,7 @@ app.innerHTML=`<main class="shell">
   <div id="matchbar" class="matchbar" hidden></div>
   <section id="lobby" class="lobby">
     <header class="lobby-header"><h1>单线</h1><span>桌面竞技场</span><small>1 / 1</small></header>
-    <div class="lobby-stage"><div class="hero-select" role="group" aria-label="选择英雄"><button class="hero-choice selected" data-hero="knight"><strong>铁卫</strong><small>近战突进</small></button><button class="hero-choice" data-hero="mage"><strong>星术师</strong><small>远程控场</small></button></div><div id="hero-detail" class="hero-summary"></div></div>
+    <div class="lobby-stage"><div class="hero-select" role="group" aria-label="选择英雄">${HERO_IDS.map((id,i)=>`<button class="hero-choice ${i===0?'selected':''}" data-hero="${id}"><strong>${HERO_PRESENTATION[id].name}</strong><small>${HERO_PRESENTATION[id].role.split(' · ')[0]}</small></button>`).join('')}</div><div id="hero-detail" class="hero-summary"></div></div>
     <div class="room-panel"><p id="room-service-label" class="muted" role="status">正在连接房间服务…</p><div id="entry"><div class="entry-fields"><label>昵称<input id="name" maxlength="16" placeholder="输入昵称" value="玩家" autocomplete="nickname"></label><label>房间密码<input id="password" type="password" maxlength="32" placeholder="4～32 位" autocomplete="off"></label></div><div class="entry-actions"><button id="create" class="primary">创建房间</button><button id="practice">单人练习</button></div><div class="join-row"><input id="room-code" aria-label="房间号" maxlength="32" placeholder="输入 6 位房间号" inputmode="numeric"><button id="join">加入房间</button></div></div><div id="room-detail" hidden></div></div>
   </section>
   <aside id="settings" class="settings panel" hidden><div class="panel-title"><h2>连接与操作</h2><button id="settings-close" aria-label="关闭设置">×</button></div><label>房间服务地址<input id="server-url" placeholder="http://朋友的电脑IP:4327"></label><button id="connect" class="wide">连接</button><p id="local-address" class="muted"></p><details><summary>操作与规则</summary><p></p></details><p class="muted">Ctrl+Shift+J 隐藏／显示，Ctrl+Shift+0 恢复窗口。</p></aside>
@@ -34,15 +35,15 @@ app.innerHTML=`<main class="shell">
   <div class="small-screen">请使用电脑鼠标与键盘游玩；可缩放或放大窗口。</div>
 </main>`;
 const {scene}=bootArena($('arena'));
-let room:Room|null=null,state:MatchState|null=null,playerId='',hero:HeroKind='knight',socket:WebSocket|null=null,online=false,practicePending:'creating'|'adding-bot'|'readying'|'starting'|null=null,toastTimer:ReturnType<typeof setTimeout>,retry:ReturnType<typeof setTimeout>,manualLeave=false;
+let room:Room|null=null,state:MatchState|null=null,playerId='',hero:HeroKind='dain',socket:WebSocket|null=null,online=false,practicePending:'creating'|'adding-bot'|'readying'|'starting'|null=null,toastTimer:ReturnType<typeof setTimeout>,retry:ReturnType<typeof setTimeout>,manualLeave=false;
 let serverUrl=localStorage.getItem('lane.server')||location.origin;
 let localServerUrl='',defaultServerUrl='',startPracticeOnConnect=false;
 let practiceFallback=false,pendingRoomAction:Record<string,unknown>|null=null;
 let hudKey='',shopBuilt=false,resultKey='',mapVisible=true;
-let preview=createMatch(['knight','mage'],[0,1]);for(let t=0;t<22;t+=.05)stepMatch(preview,.05);
+let preview=createMatch(['dain','sylra'],[0,1]);for(let t=0;t<22;t+=.05)stepMatch(preview,.05);
 scene.state=preview;
 function toast(message:string){$('toast').textContent=message;$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,4000);}
-function send(data:Record<string,unknown>){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(data));else toast('尚未连接房间服务，请在设置中检查地址。');}
+function send(data:Record<string,unknown>){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(['create','join','resume'].includes(String(data.type))?{...data,protocol:'glass-lane-v2'}:data));else toast('尚未连接房间服务，请在设置中检查地址。');}
 function me(){return room?.players.find(p=>p.id===playerId);}
 function command(c:Command){if(room?.phase==='playing'&&!room.paused)send({type:'command',command:c});}
 function updateServiceLabel(){
@@ -81,7 +82,7 @@ function connect(){
   current.onclose=()=>{if(socket!==current)return;online=false;updateServiceLabel();scene.active=false;$('connection').textContent='连接断开，正在重连…';$('connection').classList.remove('connected');retry=setTimeout(connect,2000);};
   current.onerror=()=>{if(socket===current)$('connection').textContent='服务暂时不可用，可在设置更换地址';};
 }
-function heroDetail(){const h=HEROES[hero];$('hero-detail').innerHTML=`<div class="hero-avatar"><img src="/assets/heroes/${hero}.png" alt="${h.name}"></div><div class="hero-info"><h2>${h.name}</h2><span>${h.role}</span><p>${hero==='knight'?'护盾承伤，冲锋切入。':'弹道消耗，闪烁拉扯。'}</p><div class="skill-preview">${h.skills.map(s=>`<span title="${html(s.description)}"><kbd>${s.key}</kbd><span>${s.name}</span></span>`).join('')}</div></div>`;document.querySelectorAll<HTMLElement>('[data-hero]').forEach(b=>{b.classList.toggle('selected',b.dataset.hero===hero);b.setAttribute('aria-pressed',String(b.dataset.hero===hero));});}
+function heroDetail(){const h=HEROES[hero];$('hero-detail').innerHTML=`<div class="hero-avatar"><img src="/assets/heroes/${hero}.png" alt="${h.name}"></div><div class="hero-info"><h2>${h.name}</h2><span>${h.role}</span><p>${HERO_PRESENTATION[hero].summary}</p><div class="skill-preview">${h.skills.map((s,i)=>`<span title="${html(s.sourceName+'：'+s.description)}"><kbd>${s.key}</kbd><span>${skillName(hero,i)}</span></span>`).join('')}</div></div>`;document.querySelectorAll<HTMLElement>('[data-hero]').forEach(b=>{b.classList.toggle('selected',b.dataset.hero===hero);b.setAttribute('aria-pressed',String(b.dataset.hero===hero));});}
 function renderRoom(){
   const playing=room?.phase==='playing'||room?.phase==='finished';$('lobby').hidden=!!playing;$('entry').hidden=!!room;$('room-detail').hidden=!room;$('hud').hidden=!playing;$('matchbar').hidden=!playing;$('minimap').hidden=!playing||!mapVisible;$('leave-match').hidden=!room;$('result').hidden=room?.phase!=='finished';app.classList.toggle('in-match',!!playing);
   scene.inMatch=!!playing;scene.active=room?.phase==='playing'&&!room?.paused&&online;scene.team=me()?.team??0;if(!playing){scene.state=preview;$('shop').hidden=true;state=null;hudKey='';resultKey='';}
@@ -109,19 +110,20 @@ function ensureHud(u:Unit){
 }
 function renderHud(){
   if(!state||!room)return;scene.active=room.phase==='playing'&&!room.paused&&online;const u=myHero();if(!u)return;ensureHud(u);
-  const h=HEROES[u.heroKind??'knight'],dead=u.hp<=0,time=Math.floor(state.time);
+  const h=HEROES[u.heroKind??'dain'],dead=u.hp<=0,time=Math.floor(state.time);
   setText('clock',room.paused?'等待重连':`${String(Math.floor(time/60)).padStart(2,'0')}:${String(time%60).padStart(2,'0')}`);setText('wave-label',`第 ${state.wave} 波 · ${Math.max(0,Math.ceil(state.nextWave-state.time))}秒后出兵`);
   setText('match-score',`${state.teamKills?.[0]??state.units.find(u=>u.kind==='hero'&&u.team===0)?.kills??0} : ${state.teamKills?.[1]??state.units.find(u=>u.kind==='hero'&&u.team===1)?.kills??0}`);
-  setText('respawn-label',dead?`${Math.max(0,Math.ceil((u.respawnAt??0)-state.time))} 秒复活`:'');
+  const statusNames:Record<string,string>={stun:'眩晕',root:'禁锢',stealth:'隐身',untargetable:'不可选中',slow:'减速'};const status=u.statuses?.filter(s=>s.until>state!.time&&statusNames[s.kind]).map(s=>statusNames[s.kind])??[];setText('respawn-label',dead?`${Math.max(0,Math.ceil((u.respawnAt??0)-state.time))} 秒复活`:[...new Set(status)].slice(0,2).join(' · '));
   $('health-fill').style.width=`${Math.max(0,u.hp/u.maxHp)*100}%`;$('mana-fill').style.width=`${(u.mana??0)/(u.maxMana||1)*100}%`;
-  setText('health-label',`${Math.ceil(Math.max(0,u.hp))} / ${u.maxHp}`);setText('mana-label',`${Math.floor(u.mana??0)} / ${u.maxMana}`);setText('combat-score',`补刀 ${u.lastHits??0}　击杀 ${u.kills??0} / 阵亡 ${u.deaths??0}`);setText('gold-value',String(Math.floor(u.gold??0)));
-  setText('hero-level',`Lv.${u.level}`);$('xp-fill').style.width=`${u.level>=10?100:Math.min(100,u.xp/xpForNextLevel(u.level)*100)}%`;$('xp-track').title=u.level>=10?'已达到满级 10 级':`经验 ${Math.floor(u.xp)} / ${xpForNextLevel(u.level)}，每升一级获得一个技能点`;
+  setText('health-label',`${Math.ceil(Math.max(0,u.hp))} / ${Math.round(u.maxHp)}`);setText('mana-label',`${Math.floor(u.mana??0)} / ${Math.round(u.maxMana??0)}`);setText('combat-score',`补刀 ${u.lastHits??0}　击杀 ${u.kills??0} / 阵亡 ${u.deaths??0}`);setText('gold-value',String(Math.floor(u.gold??0)));
+  setText('hero-level',`Lv.${u.level}`);$('hud').querySelector('.hero-badge')?.setAttribute('title',`${h.sourceName} · ${h.passive?.name??''}：${h.passive?.description??''} 当前层数 ${u.passiveStacks??0}`);$('xp-fill').style.width=`${u.level>=10?100:Math.min(100,u.xp/xpForNextLevel(u.level)*100)}%`;$('xp-track').title=u.level>=10?'已达到满级 10 级':`经验 ${Math.floor(u.xp)} / ${xpForNextLevel(u.level)}，每升一级获得一个技能点`;
   setText('skill-points',u.skillPoints>0?`+${u.skillPoints} 技能点`:'' );
-  for(let i=0;i<h.skills.length;i++){const skill=h.skills[i],rank=u.skillRanks[i]??0,cd=u.cooldowns?.[i]??0,button=$<HTMLButtonElement>(`ability-${i}`);button.disabled=dead||cd>0||rank===0||(u.mana??0)<skill.mana;button.classList.toggle('cooling',cd>0);button.classList.toggle('no-mana',(u.mana??0)<skill.mana);$(`cooldown-${i}`).hidden=cd<=0&&rank>0;$(`cooldown-${i}`).classList.toggle('unlearned',rank===0);setText(`cooldown-${i}`,rank===0?(u.level<skill.unlockLevel?`${skill.unlockLevel}级解锁`:'未学习'):cd>0?cd.toFixed(1):'');const canUpgrade=u.skillPoints>0&&rank<skill.maxRank&&u.level>=skill.unlockLevel&&(i!==3||rank===0||u.level>=8);$(`upgrade-${i}`).hidden=!canUpgrade;for(let r=0;r<skill.maxRank;r++)$(`rank-${i}-${r}`).classList.toggle('learned',r<rank);}
+  for(let i=0;i<h.skills.length;i++){const rank=u.skillRanks[i]??0,skill=skillForRank(u.heroKind??'dain',i as 0|1|2|3,Math.max(1,rank)),cd=u.cooldowns?.[i]??0,recast=u.recastSlot===i&&(u.recastUntil??0)>state.time,button=$<HTMLButtonElement>(`ability-${i}`);button.disabled=dead||(!recast&&(cd>0||rank===0||(u.mana??0)<skill.mana));button.title=`${skillName(u.heroKind??'dain',i)} / ${skill.sourceName}（${rank||1}级）：${skill.description} ${numericSkillDetails(skill)} 冷却 ${skill.cooldown.toFixed(2)} 秒，消耗 ${skill.mana} 法力。左键确认，右键取消。`;if(recast)button.title='再次按 R 或点击后确认，免费返回突进前的位置；右键取消瞄准。';button.classList.toggle('recast',recast);button.classList.toggle('cooling',cd>0&&!recast);button.classList.toggle('no-mana',(u.mana??0)<skill.mana);$(`cooldown-${i}`).hidden=cd<=0&&rank>0;$(`cooldown-${i}`).classList.toggle('unlearned',rank===0);setText(`cooldown-${i}`,recast?`返回
+${Math.max(0,(u.recastUntil??0)-state.time).toFixed(1)}`:rank===0?(u.level<skill.unlockLevel?`${skill.unlockLevel}级解锁`:'未学习'):cd>0?cd.toFixed(1):'');const canUpgrade=canUpgradeSkill(u,i as 0|1|2|3);$(`upgrade-${i}`).hidden=!canUpgrade;for(let r=0;r<skill.maxRank;r++)$(`rank-${i}-${r}`).classList.toggle('learned',r<rank);}
   for(const slot of ['heal','flash'] as const){const cd=u.summonerCooldowns?.[slot]??0;$<HTMLButtonElement>(`summoner-${slot}`).disabled=dead||cd>0;setText(`summoner-cd-${slot}`,cd>0?String(Math.ceil(cd)):'');}
   const potion=u.potionEffect,remaining=potion?.remaining??0,combatWait=Math.max(0,Math.ceil(5-(state.time-(u.lastCombatAt??-999))));$<HTMLButtonElement>('use-potion').disabled=dead||(u.potions??0)<=0||remaining>0;setText('potion-count',String(u.potions??0));setText('potion-timer',remaining>0?String(Math.ceil(remaining)):'');$('potion-timer').hidden=remaining<=0;$('use-potion').classList.toggle('recovering',remaining>0);$('use-potion').classList.toggle('in-combat',combatWait>0);$('use-potion').title=`恢复药水（1）：100 金币，8 秒内回复 50% 最大生命及法力。战斗中及战后 5 秒内仅回复 10%；完整药效期间再次战斗，剩余药效降至 20%。最多携带 3 瓶。${remaining>0?`药效剩余 ${Math.ceil(remaining)} 秒，当前${potion!.potency<1?'战斗减效':'完整药效'}。`:combatWait>0?`离战后完整药效还需 ${combatWait} 秒。`:'已脱战，当前可获得完整药效。'}`;
   for(let i=0;i<6;i++){const item=ITEMS.find(t=>t.id===u.items?.[i]),node=$(`inventory-${i}`),key=item?.id??'';if(node.dataset.item!==key){node.dataset.item=key;node.innerHTML=item?glyph(item.id):'';node.title=item?`${item.name}：${item.description}`:'空装备栏';}}
-  $('hero-vitals')?.setAttribute('title',`${h.name} Lv.${u.level}，补刀 ${u.lastHits??0}，击杀／阵亡 ${u.kills??0}／${u.deaths??0}`);$('hud').querySelector('.hero-vitals')?.setAttribute('title',`${h.name} Lv.${u.level}，补刀 ${u.lastHits??0}，击杀／阵亡 ${u.kills??0}／${u.deaths??0}`);$('hud').querySelector('.equipment')?.setAttribute('title',(u.items??[]).map(id=>ITEMS.find(i=>i.id===id)?.name).join('、')||'尚未购买装备');
+  $('hero-vitals')?.setAttribute('title',`${h.name} Lv.${u.level}，补刀 ${u.lastHits??0}，击杀／阵亡 ${u.kills??0}／${u.deaths??0}`);$('hud').querySelector('.hero-vitals')?.setAttribute('title',`${h.name} Lv.${u.level}，攻击 ${u.damage.toFixed(1)}，护甲 ${(u.armor??0).toFixed(1)}，魔抗 ${(u.mr??0).toFixed(1)}。${h.passive?.name??''}：${h.passive?.description??''}`);$('hud').querySelector('.equipment')?.setAttribute('title',(u.items??[]).map(id=>ITEMS.find(i=>i.id===id)?.name).join('、')||'尚未购买装备');
   updateCameraLabel(scene.following);if(mapVisible)drawMinimap();if(!$('shop').hidden)renderShop();
   if(state.status==='finished'){room.phase='finished';renderResult();}
 }
@@ -192,8 +194,8 @@ window.addEventListener('keydown',event=>{
   if(key==='s')command({type:'stop'});
 });
 window.addEventListener('blur',()=>{scene.cancelAim();endResize();});
-const rules=$('settings').querySelector('details p');if(rules)rules.textContent=`右键移动／攻击。Q/W/E/R 先显示范围，左键确认，右键或 Esc 取消；铁卫 Q 指向单位，星术师 Q/W 可走位躲避。A 显示普攻范围，左键攻击或攻击移动。D 治疗、F 闪现也需左键确认。点击 + 或 Ctrl+技能键学习，R 在 4 级解锁，满级 10 级。空格回英雄，Y 锁镜头，中键／边缘移镜头，M 收小地图，B 商店，S 停止。商店随时购买；1 使用恢复药水，8 秒渐回 50% 生命和法力，战斗中／战后 5 秒内仅回 10%。先拆塔再破基地；死亡 ${RULES.respawnSeconds} 秒后复活。`;
-if(rules)rules.textContent+=` 视距为自己英雄周围 ${RULES.visionRadius}，圈外战场与单位隐藏，小地图同步；移镜头不能揭开视野。河水不能步行，跨岸自动绕中桥，位移可越河。两岸四片草丛内对敌方隐藏，无法被普攻或指向技能锁定；方向／范围技能仍可命中，受伤显形3秒。`;
+const rules=$('settings').querySelector('details p');if(rules)rules.textContent=`右键移动／攻击。Q/W/E/R 先显示范围，左键确认，右键或 Esc 取消；四名英雄的技能与属性来自同一开源版本，被动见头像提示。A 显示普攻范围，左键攻击或攻击移动。D 治疗、F 闪现也需左键确认。点击 + 或 Ctrl+技能键学习，普通技能最高 5 级，R 在 4 / 7 / 10 级可学习和升级，角色满级 10 级。空格回英雄，Y 锁镜头，中键／边缘移镜头，M 收小地图，B 商店，S 停止。商店随时购买；1 使用恢复药水，8 秒渐回 50% 生命和法力，战斗中／战后 5 秒内仅回 10%。先拆塔再破基地；死亡 ${RULES.respawnSeconds} 秒后复活。`;
+if(rules)rules.textContent+=` 四英雄来源：Claude of Legends（MIT），固定版本数值；普通技能5级、R3级。视距为自己英雄周围 ${RULES.visionRadius}，圈外战场与单位隐藏，小地图同步；移镜头不能揭开视野。河水不能步行，跨岸自动绕中桥，位移可越河。两岸四片草丛内对敌方隐藏，无法被普攻或指向技能锁定；方向／范围技能仍可命中，受伤显形3秒。`;
 heroDetail();
 async function initializeClient(){
   if(window.desktop){try{const info=await window.desktop.info();applyLayout({scale:info.scale??1,opacity:info.opacity??1},false);localServerUrl=info.localUrl||location.origin;defaultServerUrl=info.defaultServerUrl||localServerUrl;

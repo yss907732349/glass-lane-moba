@@ -105,7 +105,7 @@ summary { color: #d5dbe0; cursor: pointer; }
 .lobby-header h1 { font-size: 18px; font-weight: 500; letter-spacing: .5px; }
 .lobby-header > span { flex: 1; margin-left: 12px; color: #a6b0bc; font-size: 11px; }
 .lobby-header small, .lobby-copy h1 small { color: #aab4c0; font: 11px Bahnschrift, sans-serif; }
-.hero-select { display: flex; gap: 0; margin-top: 19px; border-bottom: 1px solid #404853; }
+.hero-select { display: grid; grid-template-columns: 1fr 1fr; gap: 2px; margin-top: 19px; border-bottom: 1px solid #404853; }
 .hero-choice {
   position: relative; flex: 1; display: flex; align-items: center; justify-content: center; gap: 8px;
   min-height: 38px; padding: 8px; color: #9faab7; border: 0; border-radius: 0; background: transparent;
@@ -192,6 +192,10 @@ summary { color: #d5dbe0; cursor: pointer; }
 .ability:disabled { opacity: 1; background: #222a33; border-color: #45515e; }
 .ability:disabled .skill-glyph { opacity: .3; }
 .ability.no-mana small { color: #c7b1a3; }
+.ability.recast { border-color: #a1b6b0; background: #344741; }
+.ability.recast .skill-cooldown { top: 15px; font: 11px/13px 'DengXian', sans-serif; white-space: pre-line; }
+.ability.recast .skill-glyph { opacity: .12; }
+.ability.recast small { display: none; }
 .skill-cooldown { position: absolute; left: 0; right: 0; top: 17px; z-index: 1; color: #eef1f4; font: 18px Bahnschrift, sans-serif; text-shadow: 0 1px 3px #11171d; }
 .skill-cooldown.unlearned { top: 21px; font: 10px 'DengXian', sans-serif; white-space: nowrap; color: #aebcc9; }
 .skill-upgrade { position: absolute; top: -10px; right: -3px; z-index: 3; width: 19px; height: 19px; padding: 0; background: #8b9fae; border: 1px solid #b8c7d3; border-radius: 3px; color: #111b23; font: 17px/16px Bahnschrift, sans-serif; }

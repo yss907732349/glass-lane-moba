@@ -1,6 +1,6 @@
 {
   "name": "glass-lane",
-  "version": "0.1.3",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "透明单线 · 桌面联机MOBA",
@@ -43,7 +43,9 @@
       "build/**/*",
       "desktop/**/*",
       "package.json",
-      "THIRD_PARTY_NOTICES.md"
+      "THIRD_PARTY_NOTICES.md",
+      "third_party/claude-of-legends/**/*",
+      "docs/source-heroes.md"
     ],
     "win": {
       "target": [

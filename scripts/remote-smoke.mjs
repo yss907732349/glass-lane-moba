@@ -10,6 +10,7 @@ const base = new URL(address);
 if (!['http:', 'https:'].includes(base.protocol) || base.username || base.password) throw Error('服务地址必须是无账号密码的 HTTP / HTTPS 根地址。');
 base.pathname = '/'; base.search = ''; base.hash = '';
 const passed = [], clients = [], started = Date.now();
+const protocol='glass-lane-v2',heroes=['dain','fenn','ashvyn','sylra'];
 async function fetchOk(path) {
   const response = await fetch(new URL(path, base), { signal: AbortSignal.timeout(120000) });
   assert.equal(response.status, 200, `${path} HTTP status`);
@@ -25,7 +26,7 @@ async function client() {
   await Promise.race([opened, new Promise((_, reject) => { const timer = setTimeout(() => reject(Error('WebSocket 建连超时')), 22000); timer.unref(); opened.finally(() => clearTimeout(timer)).catch(() => {}); })]);
   const c = {
     socket,
-    send(message) { socket.send(JSON.stringify(message)); },
+    send(message) { socket.send(JSON.stringify(['create','join','resume'].includes(message.type)?{protocol,...message}:message)); },
     clear() { inbox.length = 0; },
     wait(predicate, timeout = 12000) {
       return new Promise((resolve, reject) => {
@@ -39,19 +40,19 @@ async function client() {
 }
 try {
   const health = await (await fetchOk('/health')).json();
-  assert.equal(health.ok, true); assert.equal(health.game, 'glass-lane'); assert.equal(health.protocol, 'glass-lane-v1');
+  assert.equal(health.ok, true); assert.equal(health.game, 'glass-lane'); assert.equal(health.protocol, protocol);assert.equal(health.version,'0.2.0');assert.deepEqual(health.heroIds,heroes);
   passed.push('线上健康检查与 MOBA 协议匹配');
   const entry = await (await fetchOk('/')).text();
   const bundles = [...entry.matchAll(/(?:src|href)="([^\"]+\.(?:js|css))"/g)].map(m => m[1]);
   assert(bundles.some(path => path.endsWith('.js')), 'entry includes built JS');
   for (const bundle of bundles) { const response = await fetchOk(bundle); assert((await response.arrayBuffer()).byteLength > 100); }
-  for (const hero of ['knight', 'mage']) { const response = await fetchOk(`/assets/heroes/${hero}.png`); assert.match(response.headers.get('content-type') || '', /image\/png/); assert((await response.arrayBuffer()).byteLength > 50); }
-  passed.push('公开入口、构建文件和两位英雄素材均可加载');
+  for (const hero of heroes) { const response = await fetchOk(`/assets/heroes/${hero}.png`); assert.match(response.headers.get('content-type') || '', /image\/png/); assert((await response.arrayBuffer()).byteLength > 50); }
+  passed.push('公开入口、构建文件和四位英雄素材均可加载');
   let a = await client(); const b = await client();
   const password = randomBytes(12).toString('hex');
-  a.send({ type: 'create', name: '部署验证甲', password, hero: 'knight' });
+  a.send({ type: 'create', name: '部署验证甲', password, hero: 'dain' });
   const welcome = await a.wait(m => m.type === 'welcome');
-  b.send({ type: 'join', name: '部署验证乙', password, code: welcome.room.code, hero: 'mage' });
+  b.send({ type: 'join', name: '部署验证乙', password, code: welcome.room.code, hero: 'ashvyn' });
   await b.wait(m => m.type === 'welcome');
   a.send({ type: 'ready', ready: true }); b.send({ type: 'ready', ready: true });
   await a.wait(m => m.type === 'room' && m.room.players.length === 2 && m.room.players.every(p => p.ready));
@@ -72,6 +73,15 @@ try {
   passed.push('断线暂停、重连恢复座位与技能状态');
   a.send({ type: 'leave' }); await a.wait(m => m.type === 'left');
   b.send({ type: 'leave' }); await b.wait(m => m.type === 'left');
+  for(const hero of heroes){
+    a.clear();a.send({type:'create',name:`英雄验证-${hero}`,password,hero});const seat=await a.wait(m=>m.type==='welcome');assert.equal(seat.protocol,protocol);assert.equal(seat.room.players[0].hero,hero);
+    a.send({type:'bot'});await a.wait(m=>m.type==='room'&&m.room.players.some(p=>p.bot&&p.hero!==hero));a.send({type:'ready',ready:true});await a.wait(m=>m.type==='room'&&m.room.players.length===2&&m.room.players.every(p=>p.ready));a.send({type:'start'});
+    const initial=(await a.wait(m=>m.type==='state')).state.units.find(u=>u.id==='hero-0');assert.equal(initial.heroKind,hero);assert.equal(initial.skillRanks.length,4);assert.equal(initial.skillPoints,1);
+    a.send({type:'command',command:{type:'upgrade',slot:0}});await a.wait(m=>m.type==='state'&&m.state.units.some(u=>u.id==='hero-0'&&u.skillRanks[0]===1));
+    a.send({type:'command',command:{type:'skill',slot:0,x:initial.x+250,y:initial.y}});await a.wait(m=>m.type==='state'&&m.state.units.some(u=>u.id==='hero-0'&&u.cooldowns[0]>0&&u.mana<initial.maxMana));
+    a.send({type:'leave'});await a.wait(m=>m.type==='left');
+  }
+  passed.push('四位导入英雄分别真实开局、升级并施放来源Q技能，金币和法力由服务端维护');
   passed.push('验证房间已主动退出清理');
   const report = { address: base.origin, passed, elapsedMs: Date.now() - started, verifiedAt: new Date().toISOString() };
   await mkdir('artifacts', { recursive: true }); await writeFile('artifacts/remote-smoke-report.json', JSON.stringify(report, null, 2));

@@ -1,0 +1,655 @@
+// Ability casting: validates mana, cooldown, and range, then turns the
+// ability's declarative CastSpec into live projectiles, zones, dashes, or
+// immediate effects. Content only declares; this module executes. Sigils
+// reuse executeCast with their own bookkeeping. Every aim, range and line is
+// measured on the ground the match stands on (geo.ts, ground.ts).
+
+import type { CastSoundId } from '../content/sounds';
+import { cos } from '../exact';
+import { away, basis, copy, delta, dirTo, dist, dot, norm, offset, onSphere, settle } from '../geo';
+import { landingOn } from '../ground';
+import { raiseOathfield } from '../oathfield';
+import { passiveOf, runGraftCast } from '../passives';
+import type { CombatCtx } from '../sim_context';
+import type { SpellLook } from '../spell_look';
+import { isSpellTarget } from '../spell_targets';
+import { effectiveRank, RANK_BASE_SCALE, RANK_CD_SCALE } from '../stats';
+import { swear, swornOf } from '../sworn';
+import { plantTrap, type TrapSpec } from '../traps';
+import type { AbilityKey, Vec2 } from '../types';
+import { hostile, type Unit } from '../unit';
+import { raiseWall } from '../walls';
+import { allyDashAim } from './ally_dash';
+import { championNearAim } from './champion_target';
+import { type ChargeSpec, chargesOf, openStore, spendCharge } from './charges';
+import { applyEffects, type EffectSpec, type Power } from './effects';
+import {
+  addStatus,
+  breakStealth,
+  isRooted,
+  isStealthed,
+  isStunned,
+  isUntargetable,
+} from './status';
+
+export type CastSpec =
+  | {
+      kind: 'skillshot';
+      speed: number;
+      radius: number;
+      range: number;
+      pierce?: boolean;
+      onHit: readonly EffectSpec[];
+      allyEffects?: readonly EffectSpec[];
+      // On a non-piercing hit, the bolt jumps once to the nearest other
+      // valid enemy within `radius` of the victim and applies `onHit` there
+      // (a deliberately weaker list in data).
+      chain?: { radius: number; onHit: readonly EffectSpec[] };
+      // When the bolt despawns at max range, the traveled line persists as
+      // an impassable fissure (walls.ts) for `duration` seconds.
+      leaveWall?: { duration: number };
+      // When the bolt despawns at max range, telegraphed eruptions seed the
+      // traveled line and detonate after `delay` (Torv's Faultline: the
+      // earth answers twice).
+      aftershock?: {
+        delay: number;
+        radius: number;
+        spacing: number;
+        effects: readonly EffectSpec[];
+      };
+    }
+  | {
+      kind: 'zone';
+      radius: number;
+      duration: number;
+      tickEvery?: number;
+      onEnter?: readonly EffectSpec[];
+      onTick?: readonly EffectSpec[];
+      allyOnTick?: readonly EffectSpec[];
+      detonateDelay?: number;
+      onDetonate?: readonly EffectSpec[];
+      // Grants the caster's team sight of the zone's area, brush and
+      // stealth included (vision.ts).
+      reveal?: boolean;
+      // Enemies crossing the rim from inside are punished (at most once per
+      // `perUnitEvery` seconds each); dashes and blinks pass free.
+      boundary?: { effects: readonly EffectSpec[]; perUnitEvery: number };
+      // A field left behind when the zone detonates (Sylra's rank-3 R).
+      leaveZone?: {
+        radius: number;
+        duration: number;
+        tickEvery?: number;
+        onTick?: readonly EffectSpec[];
+      };
+    }
+  | { kind: 'self_or_ally'; searchRadius: number; effects: readonly EffectSpec[] }
+  | {
+      kind: 'enemy_target';
+      searchRadius: number;
+      effects: readonly EffectSpec[];
+      selfEffects?: readonly EffectSpec[];
+    }
+  // The champion nearest the aim, ally or enemy, within the cast range
+  // (Ysmer's In My Stead, combat/champion_target.ts): `onAlly` or `onEnemy`
+  // on it, then `selfEffects` on the caster. Nobody in reach, no cast:
+  // refused before anything is paid. In a free-for-all every champion is
+  // an enemy, so the spell is never dead there.
+  | {
+      kind: 'champion_target';
+      searchRadius: number;
+      onAlly: readonly EffectSpec[];
+      onEnemy: readonly EffectSpec[];
+      selfEffects?: readonly EffectSpec[];
+    }
+  | { kind: 'cone'; range: number; halfAngle: number; onHit: readonly EffectSpec[] }
+  | {
+      kind: 'burst';
+      radius: number;
+      effects: readonly EffectSpec[];
+      selfEffects?: readonly EffectSpec[];
+    }
+  | {
+      kind: 'dash';
+      range: number;
+      // With a speed the dash is a real flight (dashes.ts): committed,
+      // interceptable, wall-stopped. Without one it stays an instant blink.
+      speed?: number;
+      landRadius?: number;
+      onLand?: readonly EffectSpec[];
+      selfEffects?: readonly EffectSpec[];
+      // Enemies crossed mid-flight are struck once each (traveling only).
+      passThrough?: readonly EffectSpec[];
+      // The dash goes TO the allied champion nearest the aim, landing
+      // touching them; with no ally inside `range` the cast is refused
+      // and costs nothing (combat/ally_dash.ts).
+      toAlly?: { searchRadius: number };
+      // The flight itself cannot be targeted or damaged (Fenn's R strike).
+      untargetableDuringTravel?: boolean;
+    }
+  // A temporary rampart perpendicular to the cast direction (walls.ts).
+  | { kind: 'wall'; length: number; duration: number }
+  // Ostrand's Oathfield (oathfield.ts): needs an enemy champion within
+  // `reach`, the nearest of which becomes the Sworn, then a closed ring of
+  // wall of `radius` rises around the caster for `duration` seconds.
+  // `guard`: the share of damage the caster takes less from champions
+  // outside the ring while it stands and he is inside.
+  | { kind: 'oathfield'; reach: number; radius: number; duration: number; guard?: number }
+  // A hidden pod planted at the aim (traps.ts): unseen by enemies but
+  // under their own reveal zone, it bursts into a field when one steps on
+  // it.
+  | TrapSpec;
+
+export interface AbilityDef {
+  name: string;
+  // One authored line of story, shown above the derived mechanics text
+  // (ui/describe.ts): the spell's image, never its numbers. Forged
+  // champions carry it; the roster reads well enough without.
+  flavor?: string;
+  // The cast sound, one of the palette (content/sounds.ts); a forged
+  // creator's pick. Absent, the spell sounds like its school.
+  sound?: CastSoundId;
+  // The spell look (spell_look.ts): this ability's visual as data, drawn
+  // by the renderer out of a bounded vocabulary. Presentation the sim
+  // ignores, validated like the sound so the wire stays bounded. Absent,
+  // the spell keeps the school-derived generics.
+  look?: SpellLook;
+  manaCost: number;
+  cooldown: number;
+  castRange: number;
+  // Cast time in seconds: costs are paid at press, the spell resolves after
+  // the windup, and a stun during it cancels the cast. The counterplay
+  // window big ultimates deserve; instant when absent.
+  windup?: number;
+  spec: CastSpec;
+  // Full spec replacements unlocked at rank thresholds (kits-v2 per-rank
+  // overrides): the highest entry at or below the live rank wins.
+  atRank?: readonly { rank: number; spec: CastSpec }[];
+  // ADR 0005: pressing the same key again inside `window` seconds resolves
+  // the follow-up: `returnBlink` blinks the caster back to where it
+  // pressed the first cast; `toSworn` flies it at `speed` to its Sworn
+  // (sworn.ts) when that one stands within `range`, stopped by walls and
+  // terrain like any traveling dash. Budgeted like any cast; no mana, no
+  // cooldown. The Forge offers the return blink alone.
+  recast?:
+    | { window: number; returnBlink: true }
+    | { window: number; toSworn: { speed: number; range: number } };
+  // Cast from a store of charges (combat/charges.ts): each cast spends one,
+  // one comes back every `every` seconds up to `max`, and `cooldown` is
+  // only the beat between two casts.
+  charges?: ChargeSpec;
+}
+
+// The live spec for a rank: the highest atRank override at or below `rank`,
+// else the base spec.
+export function specForRank(def: AbilityDef, rank: number): CastSpec {
+  let spec = def.spec;
+  if (def.atRank) {
+    for (const o of def.atRank) {
+      if (rank >= o.rank) spec = o.spec;
+    }
+  }
+  return spec;
+}
+
+// The aim on the caster's ground: on the sphere an aim is put back on the
+// caster's sphere, since a click or a bot's arithmetic can leave it a hair
+// off and a zone or a leap lands where the aim is.
+function aimOnGround(from: Vec2, aim: Vec2): Vec2 {
+  if (!onSphere(from) || !onSphere(aim) || norm(aim) <= 0) return aim;
+  return settle(aim, norm(from));
+}
+
+function clampToRange(from: Vec2, aim: Vec2, range: number): Vec2 {
+  const goal = aimOnGround(from, aim);
+  const d = dist(from, goal);
+  if (d <= range || d === 0) return copy(goal);
+  const dir = dirTo(from, goal);
+  return dir ? offset(from, dir, range) : copy(goal);
+}
+
+// The unit direction from the caster toward a point, east when the point
+// is the caster's own spot.
+function headingTo(from: Vec2, to: Vec2): Vec2 {
+  return dirTo(from, aimOnGround(from, to)) ?? basis(from).east;
+}
+
+// The living enemy champion nearest the caster within `reach`, if any.
+export function nearestEnemyChampion(ctx: CombatCtx, caster: Unit, reach: number): Unit | null {
+  let best: Unit | null = null;
+  let bestD = reach;
+  for (const u of ctx.units.values()) {
+    if (u.kind !== 'champion' || !hostile(caster, u) || u.dead || ctx.dead.has(u.id)) continue;
+    if (isUntargetable(u, ctx.time)) continue;
+    const d = dist(caster.pos, u.pos);
+    if (d <= bestD) {
+      bestD = d;
+      best = u;
+    }
+  }
+  return best;
+}
+
+function findEnemyTarget(
+  ctx: CombatCtx,
+  caster: Unit,
+  aim: Vec2,
+  searchRadius: number,
+  castRange: number,
+): Unit | null {
+  let best: Unit | null = null;
+  let bestD = Number.POSITIVE_INFINITY;
+  for (const u of ctx.units.values()) {
+    if (!hostile(caster, u) || u.dead || ctx.dead.has(u.id)) continue;
+    // Structures are never a spell's target (spell_targets.ts).
+    if (!isSpellTarget(u)) continue;
+    if (isStealthed(u, ctx.time) || isUntargetable(u, ctx.time)) continue;
+    const toCaster = dist(u.pos, caster.pos) - caster.radius - u.radius;
+    if (toCaster > castRange) continue;
+    const d = dist(u.pos, aim) - u.radius;
+    if (d > searchRadius) continue;
+    if (d < bestD) {
+      bestD = d;
+      best = u;
+    }
+  }
+  return best;
+}
+
+function enemiesWithin(ctx: CombatCtx, caster: Unit, center: Vec2, radius: number): Unit[] {
+  const out: Unit[] = [];
+  for (const u of ctx.units.values()) {
+    if (!hostile(caster, u) || u.dead || ctx.dead.has(u.id) || !isSpellTarget(u)) continue;
+    if (dist(u.pos, center) <= radius + u.radius) out.push(u);
+  }
+  return out;
+}
+
+// Executes a resolved CastSpec. Returns false only when the spec needs a
+// target that does not exist (nothing was paid yet in that case).
+export function executeCast(
+  ctx: CombatCtx,
+  caster: Unit,
+  spec: CastSpec,
+  castRange: number,
+  aim: Vec2,
+  power: Power,
+  vfx: string | null = null,
+): boolean {
+  switch (spec.kind) {
+    case 'skillshot': {
+      const dir = headingTo(caster.pos, aim);
+      const id = ctx.allocId();
+      ctx.projectiles.set(id, {
+        id,
+        sourceId: caster.id,
+        team: caster.team,
+        pos: copy(caster.pos),
+        dir,
+        speed: spec.speed,
+        radius: spec.radius,
+        maxRange: spec.range,
+        traveled: 0,
+        homingTargetId: null,
+        pierce: spec.pierce ?? false,
+        hitIds: new Set(),
+        power,
+        onHit: spec.onHit,
+        allyEffects: spec.allyEffects ?? [],
+        chain: spec.chain ?? null,
+        leaveWall: spec.leaveWall ?? null,
+        aftershock: spec.aftershock ?? null,
+        splashOnHit: null,
+        vfx,
+      });
+      return true;
+    }
+    case 'zone': {
+      const at = clampToRange(caster.pos, aim, castRange);
+      const tickEvery = spec.tickEvery ?? 0.5;
+      const id = ctx.allocId();
+      ctx.zones.set(id, {
+        id,
+        sourceId: caster.id,
+        team: caster.team,
+        pos: at,
+        radius: spec.radius,
+        // A zone always survives long enough to detonate.
+        until: ctx.time + Math.max(spec.duration, (spec.detonateDelay ?? 0) + 0.05),
+        tickEvery,
+        nextTickAt: ctx.time + tickEvery,
+        power,
+        onEnter: spec.onEnter ?? [],
+        onTick: spec.onTick ?? [],
+        allyOnTick: spec.allyOnTick ?? [],
+        detonateAt: spec.detonateDelay !== undefined ? ctx.time + spec.detonateDelay : null,
+        onDetonate: spec.onDetonate ?? [],
+        entered: new Set(),
+        reveal: spec.reveal ?? false,
+        boundary: spec.boundary ?? null,
+        boundaryNextAt: new Map(),
+        insideIds: new Set(),
+        leaveZone: spec.leaveZone ?? null,
+        vfx,
+      });
+      return true;
+    }
+    case 'self_or_ally': {
+      const at = clampToRange(caster.pos, aim, castRange);
+      // The caster COMPETES at its own distance to the aim (review F.2: a
+      // dying player pressing Mend next to a full-hp ally used to heal the
+      // ally instead). An ally only steals the cast by being strictly
+      // closer to the aim point.
+      let target = caster;
+      let bestD = Math.min(spec.searchRadius, dist(caster.pos, at));
+      for (const u of ctx.units.values()) {
+        if (u.team !== caster.team || u.kind !== 'champion' || u.id === caster.id) continue;
+        if (u.dead || ctx.dead.has(u.id)) continue;
+        const d = dist(u.pos, at);
+        if (d < bestD) {
+          bestD = d;
+          target = u;
+        }
+      }
+      applyEffects(ctx, caster.id, power, target, spec.effects);
+      return true;
+    }
+    case 'enemy_target': {
+      const at = clampToRange(caster.pos, aim, castRange);
+      const target = findEnemyTarget(ctx, caster, at, spec.searchRadius, castRange);
+      if (!target) return false;
+      applyEffects(ctx, caster.id, power, target, spec.effects);
+      if (spec.selfEffects) applyEffects(ctx, caster.id, power, caster, spec.selfEffects);
+      return true;
+    }
+    case 'champion_target': {
+      const at = clampToRange(caster.pos, aim, castRange);
+      const target = championNearAim(ctx, caster, at, castRange, spec.searchRadius);
+      if (!target) return false;
+      const effects = hostile(caster, target) ? spec.onEnemy : spec.onAlly;
+      applyEffects(ctx, caster.id, power, target, effects);
+      if (spec.selfEffects) applyEffects(ctx, caster.id, power, caster, spec.selfEffects);
+      return true;
+    }
+    case 'cone': {
+      // Inside the cone when the angle between the aim and the unit is at
+      // most the half angle, tested on cosines with exact arithmetic
+      // (src/sim/exact.ts): cos falls on [0, PI], so the angle is within
+      // the half angle exactly when its cosine is at least the half
+      // angle's. A cast on the caster's own spot aims east; a unit on the
+      // caster's own spot is inside every cone. On the sphere both are
+      // tangents at the caster (geo.ts, delta), so the angle is the
+      // bearing between the aim and the unit.
+      let toAim = delta(caster.pos, aimOnGround(caster.pos, aim));
+      if (toAim.x === 0 && toAim.z === 0 && (toAim.y ?? 0) === 0) toAim = basis(caster.pos).east;
+      const aimLen = norm(toAim);
+      const cosHalf = cos(spec.halfAngle);
+      for (const u of enemiesWithin(ctx, caster, caster.pos, spec.range)) {
+        const toUnit = delta(caster.pos, u.pos);
+        if (dot(toAim, toUnit) >= cosHalf * aimLen * norm(toUnit)) {
+          applyEffects(ctx, caster.id, power, u, spec.onHit);
+        }
+      }
+      return true;
+    }
+    case 'burst': {
+      for (const u of enemiesWithin(ctx, caster, caster.pos, spec.radius)) {
+        applyEffects(ctx, caster.id, power, u, spec.effects);
+      }
+      if (spec.selfEffects) applyEffects(ctx, caster.id, power, caster, spec.selfEffects);
+      return true;
+    }
+    case 'dash': {
+      let goal = aim;
+      if (spec.toAlly) {
+        // No ally in reach, no jump: the cast is refused before anything is
+        // paid, rather than throwing him at empty ground.
+        const beside = allyDashAim(ctx, caster, aim, spec.range, spec.toAlly.searchRadius);
+        if (!beside) return false;
+        goal = beside;
+      }
+      const at = clampToRange(caster.pos, goal, spec.range);
+      if (spec.speed !== undefined && spec.speed > 0) {
+        // A real flight (dashes.ts): the unit is committed on its line and
+        // the landing payload resolves wherever the flight actually ends.
+        const length = dist(caster.pos, at);
+        const dir = headingTo(caster.pos, at);
+        caster.path = [];
+        caster.activeDash = {
+          from: copy(caster.pos),
+          dir,
+          speed: spec.speed,
+          remaining: length,
+          traveled: 0,
+          landRadius: spec.landRadius ?? 0,
+          onLand: spec.onLand ?? [],
+          selfEffects: spec.selfEffects ?? [],
+          passThrough: spec.passThrough ?? [],
+          hitIds: new Set(),
+          power,
+          vfx,
+        };
+        if (spec.untargetableDuringTravel) {
+          addStatus(caster, {
+            kind: 'untargetable',
+            until: ctx.time + length / spec.speed + 0.05,
+          });
+        }
+        return true;
+      }
+      const landed = landingOn(ctx.ground, at, 6);
+      if (landed) {
+        caster.pos = copy(landed);
+        caster.path = [];
+      }
+      const fx = {
+        center: copy(caster.pos),
+        distance: dist(caster.pos, aim),
+      };
+      if (spec.onLand && spec.landRadius) {
+        for (const u of enemiesWithin(ctx, caster, caster.pos, spec.landRadius)) {
+          applyEffects(ctx, caster.id, power, u, spec.onLand, 'ability', fx);
+        }
+      }
+      if (spec.selfEffects) applyEffects(ctx, caster.id, power, caster, spec.selfEffects);
+      return true;
+    }
+    case 'wall': {
+      // The cast's heading as it arrives at the wall's center: on the
+      // plane the aim's offset from the caster.
+      const at = clampToRange(caster.pos, aim, castRange);
+      raiseWall(ctx, caster.id, caster.team, at, away(at, caster.pos), spec.length, spec.duration);
+      return true;
+    }
+    case 'oathfield': {
+      const sworn = nearestEnemyChampion(ctx, caster, spec.reach);
+      if (!sworn) return false;
+      swear(ctx, caster, sworn, true);
+      raiseOathfield(
+        ctx,
+        caster.id,
+        caster.team,
+        copy(caster.pos),
+        spec.radius,
+        spec.duration,
+        spec.guard,
+      );
+      return true;
+    }
+    case 'trap':
+      plantTrap(ctx, caster, spec, clampToRange(caster.pos, aim, castRange), power, vfx);
+      return true;
+  }
+}
+
+// The flight to the Sworn: from where the caster stands to just short of
+// the Sworn, at `speed`. Refused when there is no Sworn within `range`.
+function dashToSworn(ctx: CombatCtx, caster: Unit, speed: number, range: number): boolean {
+  const sworn = swornOf(ctx, caster);
+  if (!sworn) return false;
+  const gap = dist(caster.pos, sworn.pos);
+  const length = gap - caster.radius - sworn.radius;
+  if (gap > range || length <= 0) return false;
+  caster.path = [];
+  caster.activeDash = {
+    from: copy(caster.pos),
+    dir: headingTo(caster.pos, sworn.pos),
+    speed,
+    remaining: length,
+    traveled: 0,
+    landRadius: 0,
+    onLand: [],
+    selfEffects: [],
+    passThrough: [],
+    hitIds: new Set(),
+    power: { ad: caster.stats.ad, ap: caster.stats.ap, scale: 1 },
+    vfx: null,
+  };
+  return true;
+}
+
+export function castAbility(
+  ctx: CombatCtx,
+  caster: Unit,
+  key: AbilityKey,
+  def: AbilityDef,
+  aim: Vec2,
+): boolean {
+  if (ctx.dead.has(caster.id) || caster.dead) return false;
+  if (isStunned(caster, ctx.time)) return false;
+
+  // ADR 0005: an armed recast window resolves on the same key, skipping
+  // mana, cooldown, and rank gates (all paid by the first press). The
+  // decision budget still charges the press at the Sim layer.
+  const armed = caster.recastArmed;
+  if (armed && armed.key === key && armed.until > ctx.time) {
+    if (isRooted(caster, ctx.time)) return false;
+    const recast = def.recast;
+    if (recast && 'toSworn' in recast) {
+      // No Sworn in reach, no flight: the window stays armed.
+      if (!dashToSworn(ctx, caster, recast.toSworn.speed, recast.toSworn.range)) return false;
+      caster.recastArmed = null;
+      breakStealth(caster);
+      caster.actedAt = ctx.time;
+      ctx.events.push({ type: 'cast', unitId: caster.id, key });
+      return true;
+    }
+    caster.recastArmed = null;
+    const landed = landingOn(ctx.ground, armed.origin, 6);
+    if (landed) {
+      caster.pos = copy(landed);
+      caster.path = [];
+      caster.activeDash = null;
+    }
+    breakStealth(caster);
+    caster.actedAt = ctx.time;
+    ctx.events.push({ type: 'cast', unitId: caster.id, key });
+    return true;
+  }
+
+  const rank = effectiveRank(caster, key);
+  const spec = specForRank(def, rank);
+  // A rooted champion cannot dash out of the root (review F.2).
+  if (spec.kind === 'dash' && isRooted(caster, ctx.time)) return false;
+  // Rank 0 means locked (R before champion level 6).
+  if (rank <= 0) return false;
+  if ((caster.cooldowns[key] ?? 0) > ctx.time) return false;
+  if (def.charges) openStore(caster, key, def.charges, rank, ctx.time);
+  if (def.charges && chargesOf(caster, key) < 1) return false;
+  if (caster.mana < def.manaCost) return false;
+
+  const power = {
+    ad: caster.stats.ad,
+    ap: caster.stats.ap,
+    scale: 1 + RANK_BASE_SCALE * (rank - 1),
+  };
+  // Target-requiring specs resolve BEFORE anything is paid.
+  if (spec.kind === 'enemy_target') {
+    const at = clampToRange(caster.pos, aim, def.castRange);
+    if (!findEnemyTarget(ctx, caster, at, spec.searchRadius, def.castRange)) return false;
+  }
+  if (spec.kind === 'champion_target') {
+    const at = clampToRange(caster.pos, aim, def.castRange);
+    if (!championNearAim(ctx, caster, at, def.castRange, spec.searchRadius)) return false;
+  }
+  // The Oathfield needs an enemy champion in reach the same way.
+  if (spec.kind === 'oathfield' && !nearestEnemyChampion(ctx, caster, spec.reach)) return false;
+  // An ally-seeking dash needs an ally the same way: no jump, no charge.
+  if (spec.kind === 'dash' && spec.toAlly) {
+    const at = clampToRange(caster.pos, aim, def.castRange);
+    if (!allyDashAim(ctx, caster, at, spec.range, spec.toAlly.searchRadius)) return false;
+  }
+  // A flight whose line is blocked is refused before anything is paid:
+  // Fenn against a cliff pressed Lunge, paid its cooldown and its mana,
+  // and went nowhere (the maintainer, after the forest round). A wall
+  // raised mid-air still stops the flight at its face (dashes.ts); a
+  // blink hops over terrain and keeps its landing rule.
+  if (spec.kind === 'dash' && spec.speed !== undefined && spec.speed > 0) {
+    const goal = spec.toAlly
+      ? (allyDashAim(ctx, caster, aim, spec.range, spec.toAlly.searchRadius) ?? aim)
+      : aim;
+    const at = clampToRange(caster.pos, goal, spec.range);
+    if (!ctx.ground.lineOfWalk(caster.pos, at)) return false;
+  }
+
+  caster.cooldowns[key] = ctx.time + def.cooldown * (1 - RANK_CD_SCALE * (rank - 1));
+  if (def.charges) spendCharge(caster, key, def.charges, rank, ctx.time);
+  caster.mana -= def.manaCost;
+  breakStealth(caster);
+  caster.actedAt = ctx.time;
+  passiveOf(caster)?.onCast?.(ctx, caster, key);
+  // A Graft's say on the cooldown just set (Overgrowth); none in the 5v5.
+  if (caster.grafts.length > 0) runGraftCast(ctx, caster, key);
+  ctx.events.push({ type: 'cast', unitId: caster.id, key });
+  if (def.recast) {
+    caster.recastArmed = {
+      key,
+      until: ctx.time + def.recast.window,
+      origin: copy(caster.pos),
+    };
+  }
+  if (def.windup && def.windup > 0) {
+    // Deferred resolution: the sim's windup step fires it (or a stun
+    // cancels it). Costs stay paid either way.
+    caster.pendingSpell = { key, aim: copy(aim), resolveAt: ctx.time + def.windup };
+    caster.path = [];
+    return true;
+  }
+  return executeCast(ctx, caster, spec, def.castRange, aim, power, `${caster.championId}_${key}`);
+}
+
+// Resolves champions' pending windup casts: fire when the clock is up,
+// cancel when the caster is stunned or dead. Called from the fixed tick
+// order right before auto-attacks. Abilities come off the unit's own
+// resolved definition (roster or forged), never a global table.
+export function stepWindups(ctx: CombatCtx): void {
+  for (const u of ctx.units.values()) {
+    if (!u.pendingSpell) continue;
+    if (u.dead || ctx.dead.has(u.id) || isStunned(u, ctx.time)) {
+      // A canceled windup also disarms its recast window: the follow-up
+      // belongs to a strike that never happened.
+      if (u.recastArmed && u.recastArmed.key === u.pendingSpell.key) u.recastArmed = null;
+      u.pendingSpell = null;
+      continue;
+    }
+    if (ctx.time < u.pendingSpell.resolveAt) continue;
+    const pending = u.pendingSpell;
+    u.pendingSpell = null;
+    const def = u.champion?.abilities[pending.key];
+    if (!def) continue;
+    const rank = effectiveRank(u, pending.key);
+    const power = {
+      ad: u.stats.ad,
+      ap: u.stats.ap,
+      scale: 1 + RANK_BASE_SCALE * (Math.max(1, rank) - 1),
+    };
+    executeCast(
+      ctx,
+      u,
+      specForRank(def, Math.max(1, rank)),
+      def.castRange,
+      pending.aim,
+      power,
+      `${u.championId}_${pending.key}`,
+    );
+  }
+}

@@ -1,0 +1,873 @@
+{
+  "repository": "killian01/claude-of-legends",
+  "commit": "34fe718427d2726c92ed9063e694640e6d870013",
+  "heroes": {
+    "dain": {
+      "id": "dain",
+      "name": "Dain, Emberfist",
+      "role": "Fighter",
+      "blurb": "A brawler who wants long trades: attacks build Heat for empowered abilities.",
+      "passive": {
+        "name": "Heat",
+        "description": "Attacks build Heat (up to 4); Ember Flurry adds one. At full Heat, the next ability deals 25 percent bonus damage. A kill moments after his strike resets Blazing Jab."
+      },
+      "base": {
+        "hp": 620,
+        "mana": 300,
+        "ad": 62,
+        "ap": 0,
+        "armor": 28,
+        "mr": 30,
+        "attackRange": 1.8,
+        "attackSpeed": 0.68,
+        "moveSpeed": 3.75,
+        "hpRegen": 1.8,
+        "manaRegen": 1.1,
+        "radius": 0.68
+      },
+      "growth": {
+        "hp": 100,
+        "mana": 30,
+        "ad": 3.8,
+        "armor": 2.6,
+        "mr": 1.8
+      },
+      "abilities": {
+        "Q": {
+          "name": "Blazing Jab",
+          "manaCost": 30,
+          "cooldown": 4,
+          "castRange": 7,
+          "spec": {
+            "kind": "dash",
+            "range": 7,
+            "speed": 18,
+            "passThrough": [
+              {
+                "kind": "damage",
+                "base": 95,
+                "adRatio": 0.7,
+                "dtype": "physical"
+              },
+              {
+                "kind": "conditional",
+                "when": {
+                  "kind": "targetIsChampion"
+                },
+                "effects": [
+                  {
+                    "kind": "cooldownRefund",
+                    "key": "Q",
+                    "pctOfRemaining": 0.5
+                  },
+                  {
+                    "kind": "conditional",
+                    "when": {
+                      "kind": "targetDying"
+                    },
+                    "effects": [
+                      {
+                        "kind": "cooldownRefund",
+                        "key": "Q",
+                        "pctOfRemaining": 1
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "W": {
+          "name": "Cinder Guard",
+          "manaCost": 45,
+          "cooldown": 9,
+          "castRange": 6.5,
+          "spec": {
+            "kind": "dash",
+            "range": 6.5,
+            "speed": 16,
+            "toAlly": {
+              "searchRadius": 3.5
+            },
+            "landRadius": 2.5,
+            "onLand": [
+              {
+                "kind": "damage",
+                "base": 40,
+                "apRatio": 0.2,
+                "dtype": "magic"
+              },
+              {
+                "kind": "dot",
+                "duration": 3,
+                "perSecond": 22,
+                "dtype": "magic"
+              }
+            ],
+            "selfEffects": [
+              {
+                "kind": "shield",
+                "base": 90,
+                "duration": 3,
+                "burst": {
+                  "radius": 2.5,
+                  "onBreak": [
+                    {
+                      "kind": "damage",
+                      "base": 70,
+                      "apRatio": 0.3,
+                      "dtype": "magic"
+                    },
+                    {
+                      "kind": "slow",
+                      "pct": 0.2,
+                      "duration": 1
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "E": {
+          "name": "Ember Flurry",
+          "manaCost": 30,
+          "cooldown": 7,
+          "castRange": 0,
+          "spec": {
+            "kind": "self_or_ally",
+            "searchRadius": 0,
+            "effects": [
+              {
+                "kind": "empower",
+                "duration": 3,
+                "bonus": [
+                  {
+                    "kind": "damage",
+                    "base": 60,
+                    "adRatio": 0.4,
+                    "dtype": "magic"
+                  }
+                ],
+                "splashRadius": 2,
+                "splash": [
+                  {
+                    "kind": "damage",
+                    "base": 45,
+                    "adRatio": 0.3,
+                    "dtype": "magic"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "R": {
+          "name": "Emberfall",
+          "manaCost": 75,
+          "cooldown": 60,
+          "castRange": 6,
+          "spec": {
+            "kind": "zone",
+            "radius": 6,
+            "duration": 1.35,
+            "detonateDelay": 1.3,
+            "onDetonate": [
+              {
+                "kind": "conditional",
+                "when": {
+                  "kind": "withinCenter",
+                  "radius": 2.2
+                },
+                "effects": [
+                  {
+                    "kind": "damage",
+                    "base": 250,
+                    "adRatio": 0.8,
+                    "dtype": "magic"
+                  },
+                  {
+                    "kind": "stun",
+                    "duration": 1.2
+                  },
+                  {
+                    "kind": "dot",
+                    "duration": 2,
+                    "perSecond": 30,
+                    "dtype": "magic"
+                  }
+                ],
+                "otherwise": [
+                  {
+                    "kind": "damage",
+                    "base": 150,
+                    "adRatio": 0.5,
+                    "dtype": "magic"
+                  },
+                  {
+                    "kind": "slow",
+                    "pct": 0.4,
+                    "duration": 1.5
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "fenn": {
+      "id": "fenn",
+      "name": "Fenn, the Quickblade",
+      "role": "Assassin",
+      "blurb": "A single-target executioner who commits hard and finishes low targets.",
+      "passive": {
+        "name": "Opportunist",
+        "description": "Deals 15 percent bonus damage to enemies below 35 percent health. Takedowns on recently struck champions reset Lunge."
+      },
+      "base": {
+        "hp": 560,
+        "mana": 320,
+        "ad": 64,
+        "ap": 0,
+        "armor": 24,
+        "mr": 30,
+        "attackRange": 1.8,
+        "attackSpeed": 0.7,
+        "moveSpeed": 3.85,
+        "hpRegen": 1.6,
+        "manaRegen": 1.3,
+        "radius": 0.62
+      },
+      "growth": {
+        "hp": 92,
+        "mana": 35,
+        "ad": 5.5,
+        "armor": 2.2,
+        "mr": 1.6
+      },
+      "abilities": {
+        "Q": {
+          "name": "Lunge",
+          "manaCost": 35,
+          "cooldown": 5.5,
+          "castRange": 7,
+          "spec": {
+            "kind": "dash",
+            "range": 7,
+            "speed": 18,
+            "landRadius": 1.8,
+            "onLand": [
+              {
+                "kind": "damage",
+                "base": 79,
+                "adRatio": 1.52,
+                "dtype": "physical"
+              }
+            ]
+          }
+        },
+        "W": {
+          "name": "Twin Fangs",
+          "manaCost": 40,
+          "cooldown": 6,
+          "castRange": 8,
+          "spec": {
+            "kind": "skillshot",
+            "speed": 26,
+            "radius": 0.5,
+            "range": 8,
+            "onHit": [
+              {
+                "kind": "damage",
+                "base": 40,
+                "adRatio": 0.66,
+                "dtype": "physical"
+              },
+              {
+                "kind": "damage",
+                "base": 40,
+                "adRatio": 0.66,
+                "dtype": "physical"
+              },
+              {
+                "kind": "conditional",
+                "when": {
+                  "kind": "targetIsolated",
+                  "radius": 4
+                },
+                "effects": [
+                  {
+                    "kind": "damage",
+                    "base": 32,
+                    "adRatio": 0.53,
+                    "dtype": "physical"
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "E": {
+          "name": "Smoke Veil",
+          "manaCost": 45,
+          "cooldown": 10.5,
+          "castRange": 0,
+          "spec": {
+            "kind": "self_or_ally",
+            "searchRadius": 0,
+            "effects": [
+              {
+                "kind": "stealth",
+                "duration": 2.5
+              },
+              {
+                "kind": "buff",
+                "duration": 2.5,
+                "msPct": 0.25
+              }
+            ]
+          }
+        },
+        "R": {
+          "name": "Shadow Flurry",
+          "manaCost": 85,
+          "cooldown": 56.5,
+          "castRange": 6.5,
+          "windup": 0.35,
+          "spec": {
+            "kind": "dash",
+            "range": 6.5,
+            "speed": 14,
+            "untargetableDuringTravel": true,
+            "passThrough": [
+              {
+                "kind": "conditional",
+                "when": {
+                  "kind": "targetIsChampion"
+                },
+                "effects": [
+                  {
+                    "kind": "damage",
+                    "base": 228,
+                    "adRatio": 1.9,
+                    "dtype": "physical"
+                  }
+                ]
+              }
+            ]
+          },
+          "recast": {
+            "window": 4,
+            "returnBlink": true
+          }
+        }
+      }
+    },
+    "ashvyn": {
+      "id": "ashvyn",
+      "name": "Ashvyn, Nightbow",
+      "role": "Marksman",
+      "blurb": "A mobile duelist marksman who weaves in and out of range.",
+      "passive": {
+        "name": "Twinshot",
+        "description": "Every third attack strikes twice (the echo deals 50 percent damage). Casting Hunter's Step readies the echo instantly."
+      },
+      "base": {
+        "hp": 560,
+        "mana": 280,
+        "ad": 58,
+        "ap": 0,
+        "armor": 24,
+        "mr": 30,
+        "attackRange": 5.9,
+        "attackSpeed": 0.75,
+        "moveSpeed": 3.7,
+        "hpRegen": 1.4,
+        "manaRegen": 1.3,
+        "radius": 0.6
+      },
+      "growth": {
+        "hp": 90,
+        "mana": 30,
+        "ad": 5.5,
+        "armor": 2.2,
+        "mr": 1.3
+      },
+      "abilities": {
+        "Q": {
+          "name": "Shadow Volley",
+          "manaCost": 40,
+          "cooldown": 5.5,
+          "castRange": 7,
+          "windup": 0.25,
+          "spec": {
+            "kind": "cone",
+            "range": 7,
+            "halfAngle": 0.5235987755982988,
+            "onHit": [
+              {
+                "kind": "damage",
+                "base": 62,
+                "adRatio": 1.33,
+                "dtype": "physical"
+              }
+            ]
+          }
+        },
+        "W": {
+          "name": "Hunter's Step",
+          "manaCost": 35,
+          "cooldown": 7,
+          "castRange": 5,
+          "spec": {
+            "kind": "dash",
+            "range": 5,
+            "speed": 16,
+            "selfEffects": [
+              {
+                "kind": "buff",
+                "duration": 2.5,
+                "asPct": 0.4
+              }
+            ]
+          }
+        },
+        "E": {
+          "name": "Pinning Arrow",
+          "manaCost": 45,
+          "cooldown": 8.5,
+          "castRange": 10,
+          "spec": {
+            "kind": "skillshot",
+            "speed": 26,
+            "radius": 0.55,
+            "range": 10,
+            "onHit": [
+              {
+                "kind": "damage",
+                "base": 53,
+                "adRatio": 0.95,
+                "dtype": "physical"
+              },
+              {
+                "kind": "conditional",
+                "when": {
+                  "kind": "distanceAtLeast",
+                  "distance": 6
+                },
+                "effects": [
+                  {
+                    "kind": "root",
+                    "duration": 1
+                  }
+                ],
+                "otherwise": [
+                  {
+                    "kind": "slow",
+                    "pct": 0.4,
+                    "duration": 1
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "R": {
+          "name": "Eclipse Rain",
+          "manaCost": 85,
+          "cooldown": 64,
+          "castRange": 10,
+          "spec": {
+            "kind": "zone",
+            "radius": 5.2,
+            "duration": 3,
+            "tickEvery": 0.5,
+            "reveal": true,
+            "onTick": [
+              {
+                "kind": "damage",
+                "base": 48,
+                "adRatio": 0.66,
+                "dtype": "physical"
+              },
+              {
+                "kind": "slow",
+                "pct": 0.3,
+                "duration": 1
+              }
+            ]
+          }
+        }
+      }
+    },
+    "sylra": {
+      "id": "sylra",
+      "name": "Sylra, Thornweaver",
+      "role": "Mage",
+      "blurb": "A zone-control mage who locks areas down and punishes anyone who stays.",
+      "passive": {
+        "name": "Barbed Marks",
+        "description": "Her abilities mark enemies; the third mark on a target roots it briefly."
+      },
+      "base": {
+        "hp": 570,
+        "mana": 480,
+        "ad": 52,
+        "ap": 0,
+        "armor": 22,
+        "mr": 30,
+        "attackRange": 5.9,
+        "attackSpeed": 0.65,
+        "moveSpeed": 3.6,
+        "hpRegen": 1.1,
+        "manaRegen": 1.6,
+        "radius": 0.65
+      },
+      "growth": {
+        "hp": 96,
+        "mana": 40,
+        "ad": 3,
+        "armor": 2.4,
+        "mr": 1.3
+      },
+      "abilities": {
+        "Q": {
+          "name": "Thorn Bolt",
+          "manaCost": 45,
+          "cooldown": 5.5,
+          "castRange": 10.5,
+          "spec": {
+            "kind": "skillshot",
+            "speed": 24,
+            "radius": 0.7,
+            "range": 10.5,
+            "onHit": [
+              {
+                "kind": "damage",
+                "base": 70,
+                "apRatio": 1.23,
+                "dtype": "magic"
+              },
+              {
+                "kind": "mark",
+                "duration": 4,
+                "stacksToTrigger": 3,
+                "onTrigger": [
+                  {
+                    "kind": "root",
+                    "duration": 1.1
+                  },
+                  {
+                    "kind": "damage",
+                    "base": 35,
+                    "apRatio": 0.57,
+                    "dtype": "magic"
+                  }
+                ]
+              }
+            ],
+            "chain": {
+              "radius": 4,
+              "onHit": [
+                {
+                  "kind": "damage",
+                  "base": 49,
+                  "apRatio": 0.86,
+                  "dtype": "magic"
+                },
+                {
+                  "kind": "mark",
+                  "duration": 4,
+                  "stacksToTrigger": 3,
+                  "onTrigger": [
+                    {
+                      "kind": "root",
+                      "duration": 1.1
+                    },
+                    {
+                      "kind": "damage",
+                      "base": 35,
+                      "apRatio": 0.57,
+                      "dtype": "magic"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "W": {
+          "name": "Bramble Field",
+          "manaCost": 60,
+          "cooldown": 9,
+          "castRange": 8.5,
+          "spec": {
+            "kind": "zone",
+            "radius": 3.2,
+            "duration": 4,
+            "tickEvery": 0.5,
+            "onEnter": [
+              {
+                "kind": "mark",
+                "duration": 4,
+                "stacksToTrigger": 3,
+                "onTrigger": [
+                  {
+                    "kind": "root",
+                    "duration": 1.1
+                  },
+                  {
+                    "kind": "damage",
+                    "base": 35,
+                    "apRatio": 0.57,
+                    "dtype": "magic"
+                  }
+                ]
+              }
+            ],
+            "onTick": [
+              {
+                "kind": "damage",
+                "base": 18,
+                "apRatio": 0.19,
+                "dtype": "magic"
+              },
+              {
+                "kind": "slow",
+                "pct": 0.25,
+                "duration": 1
+              }
+            ]
+          }
+        },
+        "E": {
+          "name": "Verdant Shell",
+          "manaCost": 50,
+          "cooldown": 8.5,
+          "castRange": 8,
+          "spec": {
+            "kind": "self_or_ally",
+            "searchRadius": 2.5,
+            "effects": [
+              {
+                "kind": "shield",
+                "base": 70,
+                "apRatio": 0.6,
+                "duration": 2.5,
+                "burst": {
+                  "radius": 2.6,
+                  "onBreak": [
+                    {
+                      "kind": "damage",
+                      "base": 55,
+                      "apRatio": 0.45,
+                      "dtype": "magic"
+                    },
+                    {
+                      "kind": "mark",
+                      "duration": 4,
+                      "stacksToTrigger": 3,
+                      "onTrigger": [
+                        {
+                          "kind": "root",
+                          "duration": 1.1
+                        },
+                        {
+                          "kind": "damage",
+                          "base": 35,
+                          "apRatio": 0.57,
+                          "dtype": "magic"
+                        }
+                      ]
+                    }
+                  ],
+                  "onExpire": [
+                    {
+                      "kind": "damage",
+                      "base": 55,
+                      "apRatio": 0.45,
+                      "dtype": "magic"
+                    },
+                    {
+                      "kind": "mark",
+                      "duration": 4,
+                      "stacksToTrigger": 3,
+                      "onTrigger": [
+                        {
+                          "kind": "root",
+                          "duration": 1.1
+                        },
+                        {
+                          "kind": "damage",
+                          "base": 35,
+                          "apRatio": 0.57,
+                          "dtype": "magic"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "R": {
+          "name": "Overgrowth",
+          "manaCost": 85,
+          "cooldown": 60,
+          "castRange": 9,
+          "spec": {
+            "kind": "zone",
+            "radius": 4.8,
+            "duration": 1.3,
+            "detonateDelay": 1.25,
+            "onDetonate": [
+              {
+                "kind": "damage",
+                "base": 158,
+                "apRatio": 1.33,
+                "dtype": "magic"
+              },
+              {
+                "kind": "root",
+                "duration": 1.6
+              },
+              {
+                "kind": "mark",
+                "duration": 4,
+                "stacksToTrigger": 3,
+                "onTrigger": [
+                  {
+                    "kind": "root",
+                    "duration": 1.1
+                  },
+                  {
+                    "kind": "damage",
+                    "base": 35,
+                    "apRatio": 0.57,
+                    "dtype": "magic"
+                  }
+                ]
+              }
+            ]
+          },
+          "atRank": [
+            {
+              "rank": 3,
+              "spec": {
+                "kind": "zone",
+                "radius": 4.8,
+                "duration": 1.3,
+                "detonateDelay": 1.25,
+                "onDetonate": [
+                  {
+                    "kind": "damage",
+                    "base": 158,
+                    "apRatio": 1.33,
+                    "dtype": "magic"
+                  },
+                  {
+                    "kind": "root",
+                    "duration": 1.6
+                  },
+                  {
+                    "kind": "mark",
+                    "duration": 4,
+                    "stacksToTrigger": 3,
+                    "onTrigger": [
+                      {
+                        "kind": "root",
+                        "duration": 1.1
+                      },
+                      {
+                        "kind": "damage",
+                        "base": 35,
+                        "apRatio": 0.57,
+                        "dtype": "magic"
+                      }
+                    ]
+                  }
+                ],
+                "leaveZone": {
+                  "radius": 3.5,
+                  "duration": 2,
+                  "onTick": [
+                    {
+                      "kind": "damage",
+                      "base": 20,
+                      "apRatio": 0.2,
+                      "dtype": "magic"
+                    },
+                    {
+                      "kind": "slow",
+                      "pct": 0.4,
+                      "duration": 1
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "items": {
+    "iron_blade": {
+      "id": "iron_blade",
+      "name": "Iron Blade",
+      "cost": 350,
+      "tier": 1,
+      "stats": {
+        "ad": 10
+      }
+    },
+    "spark_rod": {
+      "id": "spark_rod",
+      "name": "Spark Rod",
+      "cost": 435,
+      "tier": 1,
+      "stats": {
+        "ap": 20
+      }
+    },
+    "guard_plate": {
+      "id": "guard_plate",
+      "name": "Guard Plate",
+      "cost": 300,
+      "tier": 1,
+      "stats": {
+        "armor": 15
+      }
+    },
+    "heart_gem": {
+      "id": "heart_gem",
+      "name": "Heart Gem",
+      "cost": 400,
+      "tier": 1,
+      "stats": {
+        "hp": 150
+      }
+    },
+    "swift_fang": {
+      "id": "swift_fang",
+      "name": "Swift Fang",
+      "cost": 300,
+      "tier": 1,
+      "stats": {
+        "attackSpeedPct": 0.12
+      }
+    },
+    "traveler_soles": {
+      "id": "traveler_soles",
+      "name": "Traveler Soles",
+      "cost": 300,
+      "tier": 1,
+      "stats": {
+        "moveSpeed": 0.25
+      }
+    }
+  }
+}

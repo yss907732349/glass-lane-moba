@@ -5,10 +5,12 @@ import { readFile, realpath, stat } from 'node:fs/promises';
 import { resolve, extname, sep } from 'node:path';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createMatch, stepMatch, applyCommand, isUnitVisibleToTeam, isPointInTeamVision, bushAt } from '../src/shared/simulation.ts';
-import { RULES } from '../src/shared/data.ts';
+import { RULES, HEROES } from '../src/shared/data.ts';
 import type { HeroKind, Team, MatchState, Command, Point } from '../src/shared/types.ts';
 
 const scrypt = promisify(scryptCallback);
+const PROTOCOL = 'glass-lane-v2';
+const VERSION = '0.2.0';
 const MIME: Record<string,string> = { '.html':'text/html; charset=utf-8', '.js':'text/javascript; charset=utf-8', '.css':'text/css; charset=utf-8', '.json':'application/json', '.png':'image/png', '.webp':'image/webp', '.jpg':'image/jpeg', '.svg':'image/svg+xml', '.woff2':'font/woff2', '.glb':'model/gltf-binary', '.ico':'image/x-icon' };
 type Phase = 'lobby'|'playing'|'finished';
 interface Player { id:string; token:string; name:string; hero:HeroKind; team:Team; ready:boolean; bot:boolean; socket:WebSocket|null; disconnectedAt:number|null }
@@ -30,13 +32,20 @@ export function snapshotForTeam(state:MatchState,team:Team):MatchState {
   return {
     ...state,
     teamKills:[state.units.find(unit=>unit.kind==='hero'&&unit.team===0)?.kills??0,state.units.find(unit=>unit.kind==='hero'&&unit.team===1)?.kills??0],
-    units:visible.map(unit=>({
-      ...unit,
-      targetId:unit.targetId&&hiddenIds.has(unit.targetId)?null:unit.targetId,
-      orderedTargetId:unit.orderedTargetId&&hiddenIds.has(unit.orderedTargetId)?null:unit.orderedTargetId,
-      moveTarget:unit.moveTarget&&!isPointInTeamVision(state,unit.moveTarget,team)?null:unit.moveTarget,
-      attackMoveTarget:unit.attackMoveTarget&&!isPointInTeamVision(state,unit.attackMoveTarget,team)?null:unit.attackMoveTarget,
-    })),
+    units:visible.map(unit=>{
+      // Cast queues, recast origins and status payloads can contain hidden targets or coordinates.
+      const {activeDash,pendingSpell,pendingAttack,recastArmed,recentDamagers,statuses,...publicUnit}=unit;
+      return {
+        ...publicUnit,
+        recastSlot:recastArmed&&recastArmed.until>state.time?recastArmed.slot:undefined,
+        recastUntil:recastArmed&&recastArmed.until>state.time?recastArmed.until:undefined,
+        statuses:statuses?.map(status=>({kind:status.kind,until:status.until,...(status.pct===undefined?{}:{pct:status.pct})})),
+        targetId:unit.targetId&&hiddenIds.has(unit.targetId)?null:unit.targetId,
+        orderedTargetId:unit.orderedTargetId&&hiddenIds.has(unit.orderedTargetId)?null:unit.orderedTargetId,
+        moveTarget:unit.moveTarget&&!isPointInTeamVision(state,unit.moveTarget,team)?null:unit.moveTarget,
+        attackMoveTarget:unit.attackMoveTarget&&!isPointInTeamVision(state,unit.attackMoveTarget,team)?null:unit.attackMoveTarget,
+      };
+    }),
     effects:state.effects.filter(effect=>{
       if(!touchesVision(effect,effect.kind==='nova'?effect.radius??0:0))return false;
       if(effect.toX!==undefined&&effect.toY!==undefined&&!isPointInTeamVision(state,{x:effect.toX,y:effect.toY},team))return false;
@@ -51,7 +60,8 @@ export function snapshotForTeam(state:MatchState,team:Team):MatchState {
     projectiles:state.projectiles.filter(projectile=>touchesVision(projectile,projectile.radius)).map(projectile=>{
       // Intersecting hazards remain visible under the renderer's sight mask, while launch metadata stays private.
       const start=isPointInTeamVision(state,{x:projectile.startX,y:projectile.startY},team)?{x:projectile.startX,y:projectile.startY}:nearestVisiblePoint(projectile);
-      return{...projectile,startX:start.x,startY:start.y,hitIds:projectile.hitIds.filter(id=>!hiddenIds.has(id))};
+      const {effects,power,chain,zone,splash,...publicProjectile}=projectile;
+      return{...publicProjectile,startX:start.x,startY:start.y,hitIds:projectile.hitIds.filter(id=>!hiddenIds.has(id)),homingTargetId:projectile.homingTargetId&&hiddenIds.has(projectile.homingTargetId)?undefined:projectile.homingTargetId};
     }),
     // The current HUD does not display the event log. Unseen combat must not leak through it.
     log:state.status==='finished'?state.log.slice(-1):[],
@@ -74,17 +84,18 @@ export async function createGameServer(options:{port?:number;host?:string;static
   function roomChanged(room:Room){broadcast(room,{type:'room',room:publicRoom(room)});}
   function cleanName(raw:unknown){if(typeof raw!=='string')throw Error('请输入昵称。');const name=raw.trim().replace(/[\u0000-\u001f\u007f]/g,'');if(!name||name.length>20)throw Error('昵称需要为1～20个字符。');return name;}
   function password(raw:unknown){if(typeof raw!=='string'||raw.length<4||raw.length>32)throw Error('房间密码需要为4～32个字符。');return raw;}
-  function hero(raw:unknown):HeroKind{if(raw!=='knight'&&raw!=='mage')throw Error('请选择英雄。');return raw;}
+  function hero(raw:unknown):HeroKind{if(typeof raw!=='string'||!Object.hasOwn(HEROES,raw))throw Error('请选择英雄。');return raw as HeroKind;}
+  function requireProtocol(raw:unknown){if(raw!==PROTOCOL)throw Error('客户端版本过旧，请更新到0.2.0后联机。');}
   function authenticateAttempt(c:Connection){const now=Date.now();let a=attempts.get(c.ip);if(!a||now-a.at>60_000){a={at:now,count:0};attempts.set(c.ip,a);}if(++a.count>25)throw Error('操作太频繁，请稍后再试。');}
   function requireSeat(c:Connection){if(!c.room||!c.player)throw Error('请先创建或加入房间。');return {room:c.room,player:c.player};}
   function requireHost(c:Connection){const seat=requireSeat(c);if(seat.room.hostId!==seat.player.id)throw Error('只有房主可以操作。');return seat;}
   function resetLobby(room:Room,notice:string){room.phase='lobby';room.match=null;room.notice=notice;for(const p of room.players)p.ready=p.bot;roomChanged(room);}
   function dropRoom(room:Room){rooms.delete(room.code);for(const p of room.players)tokens.delete(p.token);}
   function leave(c:Connection){if(!c.room||!c.player)return;const {room,player}=c;tokens.delete(player.token);room.players=room.players.filter(p=>p!==player);c.room=null;c.player=null;if(room.players.every(p=>p.bot)){dropRoom(room);return;}if(room.hostId===player.id)room.hostId=room.players.find(p=>!p.bot)!.id;resetLobby(room,`${player.name}已离开，返回房间。`);}
-  function welcome(c:Connection,socket:WebSocket,room:Room,player:Player){c.room=room;c.player=player;player.socket=socket;player.disconnectedAt=null;room.touchedAt=Date.now();send(socket,{type:'welcome',playerId:player.id,token:player.token,room:publicRoom(room)});roomChanged(room);if(room.match)send(socket,{type:'state',state:snapshotForTeam(room.match,player.team)});}
+  function welcome(c:Connection,socket:WebSocket,room:Room,player:Player){c.room=room;c.player=player;player.socket=socket;player.disconnectedAt=null;room.touchedAt=Date.now();send(socket,{type:'welcome',protocol:PROTOCOL,version:VERSION,playerId:player.id,token:player.token,room:publicRoom(room)});roomChanged(room);if(room.match)send(socket,{type:'state',state:snapshotForTeam(room.match,player.team)});}
 
   const server=createServer(async(req,res)=>{
-    if(req.url?.split('?')[0]==='/health'){res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({ok:true,game:'glass-lane',protocol:'glass-lane-v1',rooms:rooms.size}));return;}
+    if(req.url?.split('?')[0]==='/health'){res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({ok:true,game:'glass-lane',protocol:PROTOCOL,version:VERSION,heroIds:Object.keys(HEROES),rooms:rooms.size}));return;}
     if(req.method!=='GET'&&req.method!=='HEAD'){res.writeHead(405);res.end();return;}
     try{
       let pathname=decodeURIComponent((req.url??'/').split('?')[0]);
@@ -105,6 +116,7 @@ export async function createGameServer(options:{port?:number;host?:string;static
     socket.on('message',raw=>{const now=Date.now();if(now-c.windowAt>=1000){c.windowAt=now;c.messages=0;}if(++c.messages>100){socket.close(1008,'rate limit');return;}c.chain=c.chain.then(async()=>{
       if(socket.readyState!==WebSocket.OPEN)return;
       const m=JSON.parse(raw.toString());if(!m||typeof m!=='object'||Array.isArray(m)||typeof m.type!=='string')throw Error('无效请求。');
+      if(m.type==='create'||m.type==='join'||m.type==='resume')requireProtocol(m.protocol);
       if(m.type==='create'){
         if(c.room)throw Error('请先离开当前房间。');authenticateAttempt(c);if(rooms.size>=256)throw Error('房间已满，请稍后再试。');
         const name=cleanName(m.name),choice=hero(m.hero),secret=password(m.password);let code='';do{code=String(randomInt(100000,1000000));}while(rooms.has(code));
@@ -123,7 +135,7 @@ export async function createGameServer(options:{port?:number;host?:string;static
       }else if(m.type==='leave'){leave(c);send(socket,{type:'left'});
       }else if(m.type==='select'){const {room,player}=requireSeat(c);if(room.phase!=='lobby')throw Error('对局中不能更换英雄。');player.hero=hero(m.hero);player.ready=false;roomChanged(room);
       }else if(m.type==='ready'){const {room,player}=requireSeat(c);if(room.phase!=='lobby'||typeof m.ready!=='boolean')throw Error('当前不能准备。');player.ready=m.ready;roomChanged(room);
-      }else if(m.type==='bot'){const {room}=requireHost(c);if(room.phase!=='lobby'||room.players.length>=2)throw Error('没有空余位置。');const team:Team=room.players.some(p=>p.team===0)?1:0;room.players.push({id:'bot-'+randomBytes(4).toString('hex'),token:'',name:'训练陪练',hero:room.players[0].hero==='knight'?'mage':'knight',team,ready:true,bot:true,socket:null,disconnectedAt:null});roomChanged(room);
+      }else if(m.type==='bot'){const {room}=requireHost(c);if(room.phase!=='lobby'||room.players.length>=2)throw Error('没有空余位置。');const team:Team=room.players.some(p=>p.team===0)?1:0;const choices=Object.keys(HEROES) as HeroKind[];const botHero=choices[(choices.indexOf(room.players[0].hero)+1)%choices.length];room.players.push({id:'bot-'+randomBytes(4).toString('hex'),token:'',name:'训练陪练',hero:botHero,team,ready:true,bot:true,socket:null,disconnectedAt:null});roomChanged(room);
       }else if(m.type==='start'){const {room}=requireHost(c);if(room.phase!=='lobby'||room.players.length!==2||room.players.some(p=>!p.ready||(!p.bot&&!p.socket)))throw Error('需要两位玩家都准备后开始。');const choices=([0,1] as Team[]).map(t=>room.players.find(p=>p.team===t)!.hero) as [HeroKind,HeroKind];room.match=createMatch(choices,room.players.filter(p=>p.bot).map(p=>p.team));room.phase='playing';room.notice='';roomChanged(room);broadcastState(room);
       }else if(m.type==='rematch'){const {room}=requireHost(c);if(room.phase!=='finished')throw Error('请等待对局结束。');resetLobby(room,'选择英雄并准备，开始下一局。');
       }else if(m.type==='command'){const {room,player}=requireSeat(c);if(room.phase!=='playing'||!room.match)throw Error('对局尚未开始。');if(room.players.some(p=>!p.bot&&!p.socket))throw Error('等待对手重连，战场已暂停。');if(!m.command||typeof m.command!=='object')throw Error('无效操作。');const result=applyCommand(room.match,player.team,m.command as Command);if(!result.ok)throw Error(result.error??'无法执行此操作。');

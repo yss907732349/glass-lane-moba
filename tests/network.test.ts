@@ -68,6 +68,21 @@ test('vision snapshots omit distant units and effects while retaining incoming v
   assert.equal(snapshotForTeam(state,0).units.some(unit=>unit.id===enemy.id),true,'the exact sight boundary is inclusive');
 });
 
+test('snapshots omit imported ability internals and nested hidden coordinates',()=>{
+  const state=createMatch(),mine=getHero(state,0),enemy=getHero(state,1),secret={x:enemy.x,y:enemy.y};
+  mine.activeDash={destination:secret};mine.pendingSpell={target:secret,targetId:enemy.id};mine.pendingAttack={targetId:enemy.id,resolveAt:1,start:secret};
+  mine.recastArmed={slot:0,until:10,origin:secret};mine.recentDamagers=[{id:enemy.id,at:0}];mine.statuses=[{kind:'mark',until:10,pct:.2,targetId:enemy.id,origin:secret}];
+  state.projectiles.push({id:'visible-ability',kind:'bolt',team:0,ownerId:mine.id,x:mine.x,y:mine.y,startX:mine.x,startY:mine.y,dirX:1,dirY:0,speed:600,range:650,radius:10,damage:100,hitIds:[enemy.id],homingTargetId:enemy.id,effects:[{origin:secret}],power:{ad:5,ap:2,scale:1},chain:{target:secret},zone:{origin:secret},splash:{target:secret},abilityId:'dain-q'});
+  const result=snapshotForTeam(state,0),projected=result.units.find(u=>u.id===mine.id)!;
+  for(const key of ['activeDash','pendingSpell','pendingAttack','recastArmed','recentDamagers'])assert.equal(Object.hasOwn(projected,key),false);
+  assert.equal(projected.recastSlot,0);assert.equal(projected.recastUntil,10,'public recast availability excludes the return origin');
+  assert.deepEqual(projected.statuses,[{kind:'mark',until:10,pct:.2}]);
+  const shot=result.projectiles[0];for(const key of ['effects','power','chain','zone','splash'])assert.equal(Object.hasOwn(shot,key),false);
+  assert.equal(shot.homingTargetId,undefined);assert.deepEqual(shot.hitIds,[]);assert.equal(shot.abilityId,'dain-q');
+  assert.deepEqual(mine.activeDash,{destination:secret},'projection cannot mutate authoritative cast state');assert.equal(state.projectiles[0].homingTargetId,enemy.id);
+  state.time=10;assert.equal(snapshotForTeam(state,0).units.find(u=>u.id===mine.id)!.recastSlot,undefined,'expired recasts leave no usable projection');
+});
+
 async function client(port:number){
   const socket=new WebSocket(`ws://127.0.0.1:${port}/ws`);
   const inbox:Message[]=[];const listeners=new Set<()=>void>();
@@ -78,8 +93,48 @@ async function client(port:number){
     function check(){const index=inbox.findIndex(predicate);if(index>=0){const [value]=inbox.splice(index,1);clearTimeout(timer);listeners.delete(check);resolve(value);}}
     listeners.add(check);check();
   });}
-  return {socket,send:(message:unknown)=>socket.send(JSON.stringify(message)),wait,clear:()=>{inbox.length=0;}};
+  return {socket,send:(message:Record<string,unknown>)=>socket.send(JSON.stringify(['create','join','resume'].includes(String(message.type))?{protocol:'glass-lane-v2',...message}:message)),wait,clear:()=>{inbox.length=0;}};
 }
+
+test('v2 rejects old create, join and resume requests before assigning seats',async()=>{
+  const service=await createGameServer({port:0,host:'127.0.0.1'}),a=await client(service.port),b=await client(service.port);
+  try{
+    for(const type of ['create','join','resume']){
+      a.send({type,protocol:'glass-lane-v1',name:'旧版',password:'abcd',hero:'dain',code:'123456',token:'0'.repeat(64)});
+      assert.match((await a.wait(m=>m.type==='error')).message,/客户端版本过旧.*0\.2\.0/);
+      a.send({type,protocol:undefined,name:'旧版',password:'abcd',hero:'dain',code:'123456',token:'0'.repeat(64)});
+      assert.match((await a.wait(m=>m.type==='error')).message,/客户端版本过旧/);
+    }
+    a.send({type:'create',name:'新版',password:'abcd',hero:'dain'});const wa=await a.wait(m=>m.type==='welcome');
+    assert.equal(wa.protocol,'glass-lane-v2');assert.equal(wa.version,'0.2.0');
+    b.send({type:'join',name:'旧版',password:'abcd',hero:'fenn',code:wa.room.code,protocol:'glass-lane-v1'});
+    assert.match((await b.wait(m=>m.type==='error')).message,/客户端版本过旧/);
+    b.send({type:'join',name:'新版',password:'abcd',hero:'fenn',code:wa.room.code});const wb=await b.wait(m=>m.type==='welcome');assert.equal(wb.room.players.length,2);
+    const c=await client(service.port);try{
+      c.send({type:'resume',token:wa.token,protocol:'glass-lane-v1'});assert.match((await c.wait(m=>m.type==='error')).message,/客户端版本过旧/);
+      a.send({type:'ping'});assert.equal((await a.wait(m=>m.type==='pong')).type,'pong','rejected old resume must not steal an active seat');
+    }finally{c.socket.terminate();}
+  }finally{a.socket.terminate();b.socket.terminate();await service.close();}
+});
+
+test('all four imported heroes support create, join, selection and distinct bot choices',async()=>{
+  const service=await createGameServer({port:0,host:'127.0.0.1'}),a=await client(service.port),b=await client(service.port);
+  const heroes=['dain','fenn','ashvyn','sylra'];
+  try{
+    const health=await fetch(`http://127.0.0.1:${service.port}/health`).then(r=>r.json()) as any;assert.deepEqual(health.heroIds,heroes);
+    for(const [index,hero] of heroes.entries()){
+      a.clear();b.clear();a.send({type:'create',name:'房主',password:'abcd',hero});const wa=await a.wait(m=>m.type==='welcome');assert.equal(wa.room.players[0].hero,hero);
+      b.send({type:'join',name:'朋友',password:'abcd',code:wa.room.code,hero:heroes[(index+1)%heroes.length]});const wb=await b.wait(m=>m.type==='welcome');assert.equal(wb.room.players.find((p:any)=>p.id===wb.playerId).hero,heroes[(index+1)%heroes.length]);
+      for(const selected of heroes){a.send({type:'select',hero:selected});await a.wait(m=>m.type==='room'&&m.room.players.find((p:any)=>p.id===wa.playerId)?.hero===selected);}
+      a.send({type:'select',hero});await a.wait(m=>m.type==='room'&&m.room.players.find((p:any)=>p.id===wa.playerId)?.hero===hero);
+      for(const invalid of ['knight','mage','__proto__','constructor']){a.send({type:'select',hero:invalid});assert.match((await a.wait(m=>m.type==='error')).message,/请选择英雄/);}
+      b.send({type:'leave'});await b.wait(m=>m.type==='left');await a.wait(m=>m.type==='room'&&m.room.players.length===1);a.clear();
+      a.send({type:'bot'});const botRoom=await a.wait(m=>m.type==='room'&&m.room.players.some((p:any)=>p.bot));const bot=botRoom.room.players.find((p:any)=>p.bot);assert.ok(heroes.includes(bot.hero));assert.notEqual(bot.hero,hero);
+      a.send({type:'ready',ready:true});await a.wait(m=>m.type==='room'&&m.room.players.every((p:any)=>p.ready));a.send({type:'start'});const state=await a.wait(m=>m.type==='state');assert.equal(state.state.units.find((u:any)=>u.id==='hero-0').heroKind,hero);
+      a.send({type:'leave'});await a.wait(m=>m.type==='left');
+    }
+  }finally{a.socket.terminate();b.socket.terminate();await service.close();}
+});
 
 test('real two-client rooms authenticate, enforce host rules, simulate commands and resume seats',async()=>{
   const service=await createGameServer({port:0,host:'127.0.0.1'});
@@ -87,12 +142,12 @@ test('real two-client rooms authenticate, enforce host rules, simulate commands 
   let resumed:Awaited<ReturnType<typeof client>>|null=null;
   try{
     const health=await fetch(`http://127.0.0.1:${service.port}/health`).then(r=>r.json()) as any;
-    assert.equal(health.protocol,'glass-lane-v1');
-    a.send({type:'create',name:'房主',password:'abcd',hero:'knight'});
+    assert.equal(health.protocol,'glass-lane-v2');
+    a.send({type:'create',name:'房主',password:'abcd',hero:'dain'});
     const welcome=await a.wait(m=>m.type==='welcome');assert.match(welcome.room.code,/^\d{6}$/);assert.equal(welcome.room.players.length,1);
-    b.send({type:'join',name:'朋友',password:'wrong',code:welcome.room.code,hero:'mage'});
+    b.send({type:'join',name:'朋友',password:'wrong',code:welcome.room.code,hero:'ashvyn'});
     assert.match((await b.wait(m=>m.type==='error')).message,/密码/);
-    b.send({type:'join',name:'朋友',password:'abcd',code:welcome.room.code,hero:'mage'});
+    b.send({type:'join',name:'朋友',password:'abcd',code:welcome.room.code,hero:'ashvyn'});
     const friend=await b.wait(m=>m.type==='welcome');assert.equal(friend.room.players.length,2);assert.equal(friend.room.players[1].team,1);
     assert.equal(JSON.stringify(friend).includes('passwordHash'),false);
     b.send({type:'start'});assert.match((await b.wait(m=>m.type==='error')).message,/房主/);
@@ -128,8 +183,8 @@ test('live room ticks and reconnects keep enemy bush coordinates private',async(
   const a=await client(service.port),b=await client(service.port);
   let resumed:Awaited<ReturnType<typeof client>>|null=null;
   try{
-    a.send({type:'create',name:'观察方',password:'abcd',hero:'knight'});const wa=await a.wait(m=>m.type==='welcome');
-    b.send({type:'join',name:'潜伏方',password:'abcd',code:wa.room.code,hero:'mage'});await b.wait(m=>m.type==='welcome');
+    a.send({type:'create',name:'观察方',password:'abcd',hero:'dain'});const wa=await a.wait(m=>m.type==='welcome');
+    b.send({type:'join',name:'潜伏方',password:'abcd',code:wa.room.code,hero:'ashvyn'});await b.wait(m=>m.type==='welcome');
     a.send({type:'ready',ready:true});b.send({type:'ready',ready:true});
     await a.wait(m=>m.type==='room'&&m.room.players.length===2&&m.room.players.every((p:any)=>p.ready));
     a.send({type:'start'});await b.wait(m=>m.type==='state');
@@ -159,8 +214,8 @@ test('bot start and expired reconnect release seat visibly instead of leaving st
   const service=await createGameServer({port:0,host:'127.0.0.1',reconnectMs:100});
   const a=await client(service.port),b=await client(service.port);
   try{
-    a.send({type:'create',name:'甲',password:'abcd',hero:'knight'});const wa=await a.wait(m=>m.type==='welcome');
-    b.send({type:'join',name:'乙',password:'abcd',code:wa.room.code,hero:'mage'});const wb=await b.wait(m=>m.type==='welcome');
+    a.send({type:'create',name:'甲',password:'abcd',hero:'dain'});const wa=await a.wait(m=>m.type==='welcome');
+    b.send({type:'join',name:'乙',password:'abcd',code:wa.room.code,hero:'ashvyn'});const wb=await b.wait(m=>m.type==='welcome');
     a.send({type:'ready',ready:true});b.send({type:'ready',ready:true});await a.wait(m=>m.type==='room'&&m.room.players.length===2&&m.room.players.every((p:any)=>p.ready));
     a.send({type:'start'});await a.wait(m=>m.type==='state');a.clear();b.socket.terminate();
     const expired=await a.wait(m=>m.type==='room'&&m.room.phase==='lobby'&&m.room.players.length===1);
@@ -181,3 +236,4 @@ test('static serving exposes only dist content and rejects encoded traversal',as
     assert.equal((await fetch(`http://127.0.0.1:${service.port}/%5c..%5csecret.txt`)).status,404);
   }finally{await service.close();await rm(root,{recursive:true,force:true});}
 });
+

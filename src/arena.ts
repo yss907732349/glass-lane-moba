@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import type { MatchState, Unit, Team, Command, Effect, Point } from './shared/types.ts';
-import { WORLD, HEROES, RULES, SUMMONERS, TERRAIN } from './shared/data.ts';
+import { WORLD, HEROES, HERO_IDS, skillForRank, RULES, SUMMONERS, TERRAIN } from './shared/data.ts';
 import { bushAt, displacementEndpoint, isPointInTeamVision, isUnitVisibleToTeam } from './shared/simulation.ts';
 
 export function project(x:number,y:number){return{x:800+(x-WORLD.width/2)*.72+(y-WORLD.laneY)*.42,y:365+(y-WORLD.laneY)*.52-(x-WORLD.width/2)*.14};}
@@ -24,7 +24,7 @@ export class Arena extends Phaser.Scene{
   private samples=new Map<string,Sample>();private popups:Popup[]=[];private seenEffects=new Set<string>();private reducedMotion=false;private lastImpulse=-1000;
   constructor(){super('arena');}
   preload(){
-    for(const hero of ['knight','mage'])this.load.spritesheet(hero,`/assets/hero-${hero}-sheet.png`,{frameWidth:32,frameHeight:32});
+    for(const hero of HERO_IDS)this.load.spritesheet(hero,`/assets/hero-${hero}-sheet.png`,{frameWidth:32,frameHeight:32});
     for(const name of ['minion-melee','minion-ranged','sword','staff','shield'])this.load.image(name,`/assets/${name}.png`);
   }
   create(){
@@ -36,7 +36,7 @@ export class Arena extends Phaser.Scene{
     this.visionShape=this.add.graphics().setVisible(false);this.visionMask=this.visionShape.createGeometryMask();
     const corners=[[40,WORLD.minY-60],[WORLD.width-40,WORLD.minY-60],[WORLD.width-40,WORLD.maxY+60],[40,WORLD.maxY+60]].map(([x,y])=>project(x,y));const xs=corners.map(p=>p.x),ys=corners.map(p=>p.y);
     this.cameras.main.setBounds(Math.min(...xs)-100,Math.min(...ys)-150,Math.max(...xs)-Math.min(...xs)+200,Math.max(...ys)-Math.min(...ys)+300);
-    for(const hero of ['knight','mage'])for(const [name,start]of [['idle',0],['walk',4],['attack',8]] as const)this.anims.create({key:`${hero}-${name}`,frames:this.anims.generateFrameNumbers(hero,{start,end:start+3}),frameRate:name==='idle'?4:10,repeat:-1});
+    for(const hero of HERO_IDS)for(const [name,start]of [['idle',0],['walk',4],['attack',8]] as const)this.anims.create({key:`${hero}-${name}`,frames:this.anims.generateFrameNumbers(hero,{start,end:start+3}),frameRate:name==='idle'?4:10,repeat:-1});
     this.input.mouse?.disableContextMenu();this.arrows=this.input.keyboard?.addKeys({left:'LEFT',right:'RIGHT',up:'UP',down:'DOWN'},false)as typeof this.arrows;
     this.input.on('gameover',()=>this.mouseInside=true);this.input.on('gameout',()=>{this.mouseInside=false;this.drag=undefined;});
     this.input.on('pointermove',(p:Phaser.Input.Pointer)=>{const point=this.screenWorld(p.x,p.y);this.mouse=unproject(point.x,point.y);if(this.drag&&p.middleButtonDown()&&!this.uiBlocked()){this.following=false;this.cameras.main.scrollX-=(p.x-this.drag.x)/this.cameras.main.zoom;this.cameras.main.scrollY-=(p.y-this.drag.y)/this.cameras.main.zoom;this.drag={x:p.x,y:p.y};}});
@@ -74,10 +74,10 @@ export class Arena extends Phaser.Scene{
     return candidates[0]?.u;
   }
   cancelAim(){this.aimSlot=-1;this.aimedSummoner=null;this.aimAttack=false;}
-  selectSkill(slot:number){if(!this.active||!HEROES[this.ownHero()?.heroKind??'knight'].skills[slot])return;this.cancelAim();this.updateAim();this.aimSlot=slot;}
+  selectSkill(slot:number){if(!this.active||!HEROES[this.ownHero()?.heroKind??'dain'].skills[slot])return;this.cancelAim();this.updateAim();this.aimSlot=slot;}
   selectSummoner(slot:'heal'|'flash'){if(!this.active)return;this.cancelAim();this.updateAim();this.aimedSummoner=slot;}
   selectAttack(){if(!this.active)return;this.cancelAim();this.updateAim();this.aimAttack=true;}
-  cast(slot:number){if(!this.active||!this.state)return;this.updateAim();const skill=HEROES[this.ownHero()?.heroKind??'knight'].skills[slot];if(!skill)return;const target=skill.targeting==='unit'?this.mouseTarget(true):undefined;this.onCommand({type:'skill',slot:slot as 0|1|2|3,x:this.mouse.x,y:this.mouse.y,...(target?{targetId:target.id}:{})});}
+  cast(slot:number){if(!this.active||!this.state)return;this.updateAim();const own=this.ownHero();const skill=skillForRank(own?.heroKind??'dain',slot as 0|1|2|3,Math.max(1,own?.skillRanks[slot]??1));if(!skill)return;const target=skill.targeting==='unit'?this.mouseTarget(true):undefined;this.onCommand({type:'skill',slot:slot as 0|1|2|3,x:this.mouse.x,y:this.mouse.y,...(target?{targetId:target.id}:{})});}
   castSummoner(slot:'heal'|'flash'){if(!this.active)return;this.updateAim();this.onCommand({type:'summoner',slot,x:this.mouse.x,y:this.mouse.y});}
   focusWorld(x:number,y:number){this.following=false;const p=project(Phaser.Math.Clamp(x,0,WORLD.width),Phaser.Math.Clamp(y,WORLD.minY,WORLD.maxY));this.cameras.main.centerOn(p.x,p.y);}
   centerHero(){const hero=this.ownHero();if(hero){const p=project(hero.x,hero.y);this.cameras.main.centerOn(p.x,p.y);}}
@@ -167,7 +167,7 @@ export class Arena extends Phaser.Scene{
     if(this.seenEffects.size>500)this.seenEffects=new Set(this.state.effects.map(e=>e.id));
     this.sampledState=this.state;
   }
-  private makeView(u:Unit,p:Point){const texture=u.kind==='hero'?(u.heroKind??'knight'):u.kind==='ranged'?'minion-ranged':'minion-melee';const view:View={sprite:this.add.sprite(p.x,p.y,texture).setOrigin(.5,u.kind==='hero'?.875:1),label:this.add.text(p.x,p.y,'',{fontFamily:'DengXian, sans-serif',fontSize:u.kind==='hero'?'12px':'11px',color:'#d0d0d0',stroke:'#202224',strokeThickness:3}).setOrigin(.5),body:this.add.graphics(),weapon:this.add.image(p.x,p.y,u.kind==='ranged'?'staff':'sword').setOrigin(.5,.8).setVisible(false),x:p.x,y:p.y,hitAt:-1000,attackAt:-1000};this.units.set(u.id,view);return view;}
+  private makeView(u:Unit,p:Point){const texture=u.kind==='hero'?(u.heroKind??'dain'):u.kind==='ranged'?'minion-ranged':'minion-melee';const view:View={sprite:this.add.sprite(p.x,p.y,texture).setOrigin(.5,u.kind==='hero'?.875:1),label:this.add.text(p.x,p.y,'',{fontFamily:'DengXian, sans-serif',fontSize:u.kind==='hero'?'12px':'11px',color:'#d0d0d0',stroke:'#202224',strokeThickness:3}).setOrigin(.5),body:this.add.graphics(),weapon:this.add.image(p.x,p.y,u.kind==='ranged'?'staff':'sword').setOrigin(.5,.8).setVisible(false),x:p.x,y:p.y,hitAt:-1000,attackAt:-1000};this.units.set(u.id,view);return view;}
   private crystal(g:Phaser.GameObjects.Graphics,x:number,y:number,width:number,height:number,color:number){this.screenPoly(g,[[x,y-height],[x-width,y-height*.45],[x,y]],color);this.screenPoly(g,[[x,y-height],[x+width,y-height*.45],[x,y]],pale(color===tint(0)?0:1),.86);g.lineStyle(1,0xd9e7d8,.7);g.lineBetween(x,y-height,x,y);g.lineStyle(1,0xeee2bd,.5);g.lineBetween(x-width,y-height*.45,x,y-height);}
   private drawStructure(u:Unit,v:View){
     const g=v.body,x=v.x,y=v.y,base=u.kind==='base',color=tint(u.team),alive=u.hp>0,hit=this.time.now-v.hitAt<110,attack=Math.max(0,1-(this.time.now-v.attackAt)/230);
@@ -206,11 +206,11 @@ export class Arena extends Phaser.Scene{
     v.sprite.setVisible(true).setPosition(x,y-2+bob).setDepth(y).setFlipX(flip).setAngle(hit&&!this.reducedMotion?(flip?3:-3):0);
     if(hit)v.sprite.setTintFill(0xeee0bf);else v.sprite.clearTint();
     if(hero){
-      const concealed=u.team===this.team&&!!bushAt(u)&&(u.revealedUntil??0)<=this.state!.time;
+      const stealthed=!!u.statuses?.some(st=>st.kind==='stealth'&&st.until>this.state!.time),concealed=u.team===this.team&&(stealthed||(!!bushAt(u)&&(u.revealedUntil??0)<=this.state!.time));
       v.sprite.setAlpha(concealed ? .55:1).setDisplaySize(90,90).play(`${u.heroKind}-${attacking?'attack':moving?'walk':'idle'}`,true);v.weapon.setVisible(false);
-      g.lineStyle(u.team===this.team?2:1,color,.9);g.strokeEllipse(x,y,44,20);if(u.team===this.team){g.fillStyle(0xe1d5a6,.9);g.fillTriangle(x,y+15,x-4,y+20,x+4,y+20);}
+      g.lineStyle(u.team===this.team?2:1,color,.9);g.strokeEllipse(x,y,44,20);if(u.statuses?.some(st=>['root','stun'].includes(st.kind)&&st.until>this.state!.time)){g.lineStyle(2,0xc7b59b,.8);g.strokeEllipse(x,y-30,50,12);}if(u.heroKind==='dain'||u.heroKind==='ashvyn'){const count=u.heroKind==='dain'?4:3;for(let i=0;i<count;i++){g.fillStyle(i<(u.passiveStacks??0)?0xc8b98f:0x405049,.9);g.fillRect(x-count*4+i*8,y-84,5,2);}}if(u.team===this.team){g.fillStyle(0xe1d5a6,.9);g.fillTriangle(x,y+15,x-4,y+20,x+4,y+20);}
       if((u.shield??0)>0){g.fillStyle(0xb0cfc0,.07);g.fillEllipse(x,y-29,57,70);g.lineStyle(1.5,0xc9b77d,.8);g.strokeEllipse(x,y-29,57,70);g.lineStyle(1,0xdbe0b7,.55);g.strokeEllipse(x-2,y-29,47,63);}
-      v.label.setText(`${u.name} · ${u.level??1}${concealed?' · 草丛':''}`).setPosition(x,y-77).setDepth(y+1).setAlpha(concealed ? .8:1);this.bar(g,x,y-66,56,u.hp/u.maxHp,color);this.bar(g,x,y-58,56,(u.mana??0)/(u.maxMana||1),0x789fbb,3);
+      v.label.setText(`${u.name} · ${u.level??1}${stealthed?' · 隐身':concealed?' · 草丛':''}`).setPosition(x,y-77).setDepth(y+1).setAlpha(concealed ? .8:1);this.bar(g,x,y-66,56,u.hp/u.maxHp,color);this.bar(g,x,y-58,56,(u.mana??0)/(u.maxMana||1),0x789fbb,3);
     }else{
       v.label.setText('');v.sprite.setAlpha(1).setDisplaySize(34,34);g.lineStyle(2,color,.9);g.strokeEllipse(x,y,26,12);g.fillStyle(color,.7);g.fillTriangle(x-15,y-19,x-10,y-23,x-10,y-15);
       const swing=attacking&&!this.reducedMotion?Math.sin(attackAge/280*Math.PI)*1.1:0;v.weapon.clearTint().setVisible(true).setPosition(x+(flip?-1:1)*12,y-10+bob).setDisplaySize(u.kind==='ranged'?24:23,24).setRotation((flip?-.1:.1)+(flip?-swing:swing)).setFlipX(flip).setDepth(y+.1);
@@ -260,13 +260,22 @@ export class Arena extends Phaser.Scene{
     const hero=this.ownHero();if(!hero||hero.hp<=0||!this.active||this.uiBlocked())return;const g=this.ink;this.updateAim();
     if(this.aimAttack){this.worldCircle(g,hero.x,hero.y,hero.range,0xd8ba77,.85,.035);const target=this.mouseTarget(false);if(target){this.worldCircle(g,target.x,target.y,target.kind==='hero'?44:33,0xdba66e,.95);this.worldLine(g,hero,target,0xd5ae78,1,.7);}else{const p=project(this.mouse.x,this.mouse.y);g.lineStyle(1.5,0xdbc189,.9);g.lineBetween(p.x-9,p.y,p.x+9,p.y);g.lineBetween(p.x,p.y-6,p.x,p.y+6);}return;}
     if(this.aimedSummoner){const flash=this.aimedSummoner==='flash',color=flash?0xe2c387:0xadd496;if(flash){this.worldCircle(g,hero.x,hero.y,SUMMONERS.flash.range,color,.6,.02);const p=displacementEndpoint(hero,this.boundedMouse(),SUMMONERS.flash.range);this.worldLine(g,hero,p,color,2,.8);this.worldCircle(g,p.x,p.y,30,color,.95,.08);}else this.worldCircle(g,hero.x,hero.y,70,color,.8,.06);return;}
-    if(this.aimSlot<0)return;const skill=HEROES[hero.heroKind??'knight'].skills[this.aimSlot];if(!skill)return;const valid=(hero.skillRanks[this.aimSlot]??0)>0&&(hero.cooldowns?.[this.aimSlot]??0)<=0&&(hero.mana??0)>=skill.mana,color=valid?0xd8c18d:0x8e968d;
-    if(skill.targeting==='self'){this.worldCircle(g,hero.x,hero.y,64,color,.85,.08);return;}
+    if(this.aimSlot<0)return;const slot=this.aimSlot as 0|1|2|3,skill=skillForRank(hero.heroKind??'dain',slot,Math.max(1,hero.skillRanks[slot]??1));if(!skill)return;
+    const recast=hero.recastSlot===slot&&(hero.recastUntil??0)>this.state!.time,valid=recast||((hero.skillRanks[slot]??0)>0&&(hero.cooldowns?.[slot]??0)<=0&&(hero.mana??0)>=skill.mana),color=valid?0xd8c18d:0x8e968d,geometry=skill.geometry;
+    if(skill.targeting==='self'){this.worldCircle(g,hero.x,hero.y,geometry?.radius||64,color,.85,.08);return;}
     this.worldCircle(g,hero.x,hero.y,skill.range,color,.45);
+    if(skill.targeting==='ally'){
+      const allies=this.state!.units.filter(u=>u.team===hero.team&&u.hp>0&&dist(hero,u)<=skill.range).sort((a,b)=>dist(a,this.mouse)-dist(b,this.mouse)),target=allies[0];
+      if(target){this.worldCircle(g,target.x,target.y,Math.max(30,geometry?.radius??30),color,.9,.08);this.worldLine(g,hero,target,color,1.5,.75);}return;
+    }
     if(skill.targeting==='unit'){const target=this.mouseTarget(true);if(target){const inRange=dist(hero,target)<=skill.range;this.worldCircle(g,target.x,target.y,43,inRange?0xe1cb91:0xcd9d85,.95,.08);this.worldLine(g,hero,target,inRange?color:0xcd9d85,1,.75);}}
-    else if(skill.targeting==='ground'){const p=this.cappedPoint(hero,skill.range);this.worldCircle(g,p.x,p.y,this.aimSlot===3?260:135,color,.9,.075);this.worldLine(g,hero,p,color,1,.35);}
-    else if(hero.heroKind==='mage'&&this.aimSlot===0)this.directionGuide(hero,skill.range,60,color);
-    else{const p=displacementEndpoint(hero,this.boundedMouse(),skill.range);this.worldLine(g,hero,p,color,2,.8);this.worldCircle(g,p.x,p.y,hero.heroKind==='knight'?110:30,color,.9,.055);}
+    else if(geometry?.kind==='cone'){
+      const angle=Math.atan2(this.mouse.y-hero.y,this.mouse.x-hero.x),half=geometry.halfAngle??Math.PI/6,points=[[hero.x,hero.y],...Array.from({length:25},(_,i)=>{const a=angle-half+i*half/12;return[hero.x+Math.cos(a)*skill.range,hero.y+Math.sin(a)*skill.range];})];
+      this.polygon(g,points,color,.09);g.lineStyle(1.5,color,.8);g.strokePoints(points.map(([x,y])=>project(x,y)),true);
+    }
+    else if(skill.targeting==='ground'){const p=this.cappedPoint(hero,skill.range);this.worldCircle(g,p.x,p.y,geometry?.radius??30,color,.9,.075);this.worldLine(g,hero,p,color,1,.35);}
+    else if(geometry?.kind==='skillshot')this.directionGuide(hero,skill.range,(geometry.radius??15)*2,color);
+    else{const p=displacementEndpoint(hero,this.boundedMouse(),skill.range);this.worldLine(g,hero,p,color,2,.8);this.worldCircle(g,p.x,p.y,geometry?.radius??30,color,.9,.055);}
   }
   update(_time:number,delta:number){
     if(!this.state||!this.ink)return;const camera=this.cameras.main;
@@ -277,7 +286,20 @@ export class Arena extends Phaser.Scene{
     for(const u of [...this.state.units].filter(u=>(u.hp>0||u.kind==='tower'||u.kind==='base')&&isUnitVisibleToTeam(this.state!,u,this.team)).sort((a,b)=>project(a.x,a.y).y-project(b.x,b.y).y)){const p=project(u.x,u.y),v=this.units.get(u.id)??this.makeView(u,p);live.add(u.id);this.drawUnit(u,v,delta);}
     for(const [id,v]of this.units)if(!live.has(id)){v.sprite.destroy();v.label.destroy();v.body.destroy();v.weapon.destroy();this.units.delete(id);}
     for(const e of this.state.effects)this.drawEffect(e);
-    for(const missile of this.state.projectiles??[]){if(!this.ownHero()||dist(this.ownHero()!,missile)>RULES.visionRadius+missile.radius)continue;const p=project(missile.x,missile.y),color=pale(missile.team);if(missile.kind==='nova'){const remaining=Math.max(0,(missile.activateAt??this.state.time)-this.state.time),ultimate=missile.radius>=250;this.worldCircle(this.ink,missile.x,missile.y,missile.radius,color,.85,.065);this.worldCircle(this.ink,missile.x,missile.y,missile.radius*(1-remaining/(ultimate?1:.65)),color,.55);if(ultimate){this.fx.lineStyle(3,0xe1c99a,.7);this.fx.lineBetween(p.x,p.y-25,p.x,p.y-25-remaining*110);}}else{const back=project(missile.x-missile.dirX*65,missile.y-missile.dirY*65);this.fx.lineStyle(11,color,.15);this.fx.lineBetween(back.x,back.y-18,p.x,p.y-18);this.fx.lineStyle(4,color,.9);this.fx.lineBetween(back.x,back.y-18,p.x,p.y-18);this.fx.fillStyle(0xe4e9ce);this.fx.fillCircle(p.x,p.y-18,5);this.worldCircle(this.ink,missile.x,missile.y,missile.radius,color,.3);}}
+    for(const missile of this.state.projectiles??[]){
+      if(!this.ownHero()||dist(this.ownHero()!,missile)>RULES.visionRadius+missile.radius)continue;
+      const p=project(missile.x,missile.y),color=pale(missile.team);
+      if(missile.kind==='nova'){
+        const detonate=missile.detonateAt,warning=detonate!==undefined&&detonate>this.state.time,total=Math.max(.01,(detonate??missile.expiresAt??this.state.time+1)-(missile.createdAt??this.state.time)),elapsed=Phaser.Math.Clamp((this.state.time-(missile.createdAt??this.state.time))/total,0,1);
+        this.worldCircle(this.ink,missile.x,missile.y,missile.radius,color,.8,warning?.055:.035);
+        this.worldCircle(this.ink,missile.x,missile.y,missile.radius*(warning?elapsed:.85+.05*Math.sin(this.time.now/170)),color,warning?.65:.3);
+        if(warning){this.fx.lineStyle(2,0xd5c39b,.65);this.fx.lineBetween(p.x,p.y-18,p.x,p.y-18-(1-elapsed)*85);}
+        else{const spokes=6;for(let i=0;i<spokes;i++){const a=i*Math.PI*2/spokes+this.time.now/2600;const q=project(missile.x+Math.cos(a)*missile.radius*.65,missile.y+Math.sin(a)*missile.radius*.65);this.fx.lineStyle(1,color,.25);this.fx.lineBetween(q.x,q.y-9,q.x,q.y-2);}}
+      }else{
+        const back=project(missile.x-missile.dirX*(missile.via==='attack'?28:65),missile.y-missile.dirY*(missile.via==='attack'?28:65));
+        this.fx.lineStyle(missile.via==='attack'?4:11,color,.15);this.fx.lineBetween(back.x,back.y-18,p.x,p.y-18);this.fx.lineStyle(missile.via==='attack'?2:4,color,.9);this.fx.lineBetween(back.x,back.y-18,p.x,p.y-18);this.fx.fillStyle(0xe4e9ce);this.fx.fillCircle(p.x,p.y-18,missile.via==='attack'?2.5:5);this.worldCircle(this.ink,missile.x,missile.y,missile.radius,color,.25);
+      }
+    }
     if(this.marker&&this.time.now-this.marker.at<500){const p=project(this.marker.x,this.marker.y),life=(this.time.now-this.marker.at)/500,r=8+life*12,color=this.marker.attack?0xdaa478:0xd5c490;this.ink.lineStyle(1.5,color,1-life);this.ink.strokeEllipse(p.x,p.y,r*2,r);for(let i=0;i<4;i++){const a=i*Math.PI/2;this.ink.lineBetween(p.x+Math.cos(a)*r*1.6,p.y+Math.sin(a)*r*.8,p.x+Math.cos(a)*r*2.1,p.y+Math.sin(a)*r*1.05);}}
     this.drawTowerCoverage();this.drawAim();this.popups=this.popups.filter(p=>{if(this.time.now>=p.end||(this.active&&!isPointInTeamVision(this.state!,unproject(p.x,p.y),this.team))){p.text.destroy();return false;}const t=(this.time.now-p.start)/(p.end-p.start);p.text.setPosition(p.x,p.y-(this.reducedMotion?0:t*35)).setAlpha(Math.min(1,(1-t)*3));return true;});
   }

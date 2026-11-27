@@ -1,437 +1,180 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { applyCommand, bushAt, createMatch as createRawMatch, displacementEndpoint, getHero, isPointInTeamVision, isUnitTargetableBy, isUnitVisibleToTeam, isWater, stepMatch } from '../src/shared/simulation.ts';
-import { RULES, SUMMONERS, TERRAIN, WORLD, xpForNextLevel } from '../src/shared/data.ts';
-import type { MatchState, Unit } from '../src/shared/types.ts';
+import { applyCommand, bushAt, createMatch, displacementEndpoint, getHero, isPointInTeamVision, isUnitTargetableBy, isUnitVisibleToTeam, isWater, stepMatch } from '../src/shared/simulation.ts';
+import { HEROES, ITEMS, RULES, SOURCE_HEROES, SUMMONERS, TERRAIN, WORLD, xpForNextLevel } from '../src/shared/data.ts';
+import type { HeroKind, MatchState, Team, Unit } from '../src/shared/types.ts';
 
-const center = WORLD.width / 2, lane = WORLD.laneY;
-function createMatch(...args: Parameters<typeof createRawMatch>) {
-  const s = createRawMatch(...args);
-  for (const u of s.units.filter(u => u.kind === 'hero')) u.skillRanks = [1, 1, 1, 0];
-  return s;
-}
-function advance(s: MatchState, seconds: number) {
-  for (let i = 0; i < Math.round(seconds * 20); i++) stepMatch(s, .05);
-}
-function place(u: Unit, x: number, y = lane) { u.x = x; u.y = y; }
+const lane=WORLD.laneY;
+const close=(actual:number,expected:number,label='value')=>assert.ok(Math.abs(actual-expected)<1e-7,`${label}: expected ${expected}, got ${actual}`);
+function advance(s:MatchState,seconds:number){for(let i=0;i<Math.round(seconds*20);i++)stepMatch(s,.05);}
+function until(s:MatchState,predicate:()=>boolean,seconds=3){for(let i=0;i<Math.round(seconds*20)&&!predicate();i++)stepMatch(s,.05);assert.ok(predicate(),'expected gameplay condition within bounded simulation time');}
+function place(u:Unit,x:number,y=lane){u.x=x;u.y=y;}
+function quiet(u:Unit){u.hpRegen=0;u.manaRegen=0;u.attackTimer=999;u.targetId=null;u.orderedTargetId=null;u.moveTarget=null;u.attackMoveTarget=null;u.pendingAttack=undefined;}
+function fixture(choices:[HeroKind,HeroKind]=['sylra','dain'],structures=false){const s=createMatch(choices);s.nextWave=Infinity;if(!structures)s.units=s.units.filter(u=>u.kind==='hero');for(const u of s.units)quiet(u);return s;}
+function troop(s:MatchState,id:string,team:Team,x:number,y=lane):Unit{const model=getHero(s,team);const u:Unit={...model,id,team,kind:'melee',heroKind:undefined,name:id,x,y,hp:300,maxHp:300,armor:0,mr:0,radius:20,damage:0,range:43,speed:0,attackCd:1,attackTimer:999,targetId:null,orderedTargetId:null,moveTarget:null,attackMoveTarget:null,statuses:[],recentDamagers:[],items:[],skillRanks:[],passiveStacks:0,pendingAttack:undefined,pendingSpell:undefined,activeDash:undefined};s.units.push(u);return u;}
+function buy(s:MatchState,team:Team,itemId:string){const result=applyCommand(s,team,{type:'buy',itemId});assert.equal(result.ok,true,result.error);quiet(getHero(s,team));}
+function attack(s:MatchState,team:Team,target:Unit){const hero=getHero(s,team);hero.attackTimer=0;assert.equal(applyCommand(s,team,{type:'attack',targetId:target.id}).ok,true);}
 
-test('large world has one tower/base per team, straight waves and passive income', () => {
-  const s = createMatch();
-  assert.equal(s.units.filter(u => u.kind === 'hero').length, 2);
-  assert.equal(s.units.filter(u => u.kind === 'tower').length, 2);
-  assert.equal(s.units.filter(u => u.kind === 'base').length, 2);
-  assert.equal(getHero(s, 0).x, WORLD.spawnX[0]);
-  assert.equal(getHero(s, 1).x, WORLD.spawnX[1]);
-  assert.ok(WORLD.towerX[1] - WORLD.towerX[0] > 2000);
-  const tower = s.units.find(u => u.kind === 'tower')!;
-  const furthestEdge = Math.max(WORLD.laneY - WORLD.minY, WORLD.maxY - WORLD.laneY);
-  assert.ok(furthestEdge < tower.range, 'tower range covers the entire traversable width');
-  assert.ok(2 * Math.sqrt(tower.range ** 2 - furthestEdge ** 2) > SUMMONERS.flash.range, 'edge route cannot skip the entire tower range with one flash');
-  advance(s, 3.1);
-  assert.equal(s.wave, 1);
-  assert.equal(s.units.filter(u => u.kind === 'melee').length, 6);
-  assert.equal(s.units.filter(u => u.kind === 'ranged').length, 2);
-  assert.ok(s.units.filter(u => u.kind === 'melee').every(u => Math.abs(u.y - lane) <= 18));
-  assert.ok(getHero(s, 0).gold! > 509);
+test('single lane starts with one tower and base per team, waves and passive income',()=>{
+ const s=createMatch();assert.equal(s.units.filter(u=>u.kind==='hero').length,2);assert.equal(s.units.filter(u=>u.kind==='tower').length,2);assert.equal(s.units.filter(u=>u.kind==='base').length,2);
+ for(const team of [0,1] as Team[]){assert.equal(getHero(s,team).x,WORLD.spawnX[team]);assert.equal(getHero(s,team).gold,RULES.startingGold);}
+ const tower=s.units.find(u=>u.kind==='tower')!,edge=Math.max(lane-WORLD.minY,WORLD.maxY-lane);assert.ok(edge<tower.range);assert.ok(2*Math.sqrt(tower.range**2-edge**2)>SUMMONERS.flash.range,'one flash cannot bypass the entire tower range');
+ advance(s,3.1);assert.equal(s.wave,1);assert.equal(s.units.filter(u=>u.kind==='melee').length,6);assert.equal(s.units.filter(u=>u.kind==='ranged').length,2);assert.ok(s.units.filter(u=>u.kind==='melee').every(u=>Math.abs(u.y-lane)<=18));close(getHero(s,0).gold!,RULES.startingGold+3.1*RULES.passiveGoldPerSecond);
 });
 
-test('base shield prevents direct attacks and projectiles until tower destroyed', () => {
-  const s = createMatch(['mage', 'knight']); const hero = getHero(s, 0);
-  const base = s.units.find(u => u.id === 'base-1')!; place(hero, base.x - 150);
-  assert.equal(applyCommand(s, 0, { type: 'attack', targetId: base.id }).ok, false);
-  applyCommand(s, 0, { type: 'skill', slot: 0, x: base.x, y: base.y }); advance(s, .3);
-  assert.equal(base.hp, base.maxHp);
-  s.units.find(u => u.id === 'tower-1')!.hp = 0; hero.cooldowns![0] = 0;
-  applyCommand(s, 0, { type: 'skill', slot: 0, x: base.x, y: base.y }); advance(s, .3);
-  assert.ok(base.hp < base.maxHp);
+test('protected base refuses attacks, source spells spare structures, exposed base takes autoattacks',()=>{
+ const s=fixture(['sylra','dain'],true),hero=getHero(s,0),enemy=getHero(s,1),base=s.units.find(u=>u.id==='base-1')!;place(hero,base.x+90);place(enemy,1500);
+ assert.equal(applyCommand(s,0,{type:'attack',targetId:base.id}).ok,false);hero.skillRanks[0]=1;assert.equal(applyCommand(s,0,{type:'skill',slot:0,x:base.x,y:base.y}).ok,true);advance(s,1);assert.equal(base.hp,base.maxHp);
+ s.units.find(u=>u.id==='tower-1')!.hp=0;hero.cooldowns![0]=0;assert.equal(applyCommand(s,0,{type:'skill',slot:0,x:base.x,y:base.y}).ok,true);advance(s,1);assert.equal(base.hp,base.maxHp,'source abilities do not damage structures even after protection ends');
+ attack(s,0,base);until(s,()=>base.hp<base.maxHp);
 });
 
-test('hero final blow grants last-hit gold', () => {
-  const s = createMatch(['mage', 'knight']); advance(s, 3.1);
-  const hero = getHero(s, 0); place(hero, center);
-  const victim = s.units.find(u => u.team === 1 && u.kind === 'melee')!; place(victim, center + 100); victim.hp = 10;
-  const before = hero.gold!;
-  applyCommand(s, 0, { type: 'attack', targetId: victim.id }); stepMatch(s, .05);
-  assert.equal(hero.lastHits, 1); assert.ok(hero.gold! >= before + 38);
+test('only the hero final blow grants last-hit gold',()=>{
+ const s=fixture(),hero=getHero(s,0);place(hero,1800);place(getHero(s,1),4000);const victim=troop(s,'last-hit',1,1900);victim.hp=1;const gold=hero.gold!;attack(s,0,victim);until(s,()=>victim.hp===0);
+ assert.equal(hero.lastHits,1);close(hero.gold!-gold,38+s.time*RULES.passiveGoldPerSecond);assert.equal(s.units.some(u=>u.id===victim.id),false);
 });
 
-test('equipment is server priced and limited to six slots while purchasing anywhere', () => {
-  const s = createMatch(); const hero = getHero(s, 0);
-  assert.equal(applyCommand(s, 0, { type: 'buy', itemId: 'sword' }).ok, true);
-  assert.equal(hero.gold, 200); assert.equal(hero.damage, 90);
-  assert.equal(applyCommand(s, 0, { type: 'buy', itemId: 'sword' }).ok, false);
-  hero.gold = 9999; place(hero, center);
-  assert.equal(applyCommand(s, 0, { type: 'buy', itemId: 'heart' }).ok, true);
-  assert.equal(hero.items!.length, 2);
-  for (let i = 0; i < 4; i++) assert.equal(applyCommand(s, 0, { type: 'buy', itemId: 'heart' }).ok, true);
-  assert.equal(applyCommand(s, 0, { type: 'buy', itemId: 'heart' }).ok, false);
+test('allied troop kills grant nearby XP but no shared last-hit gold',()=>{
+ const s=fixture(),hero=getHero(s,0);place(hero,1800);const ally=troop(s,'ally',0,1900),victim=troop(s,'victim',1,1930);ally.damage=999;ally.attackTimer=0;victim.hp=1;
+ const gold=hero.gold!;until(s,()=>victim.hp===0);assert.equal(hero.lastHits,0);assert.equal(hero.xp,42);close(hero.gold!-gold,s.time*RULES.passiveGoldPerSecond);
 });
 
-test('mana/cooldowns enforce casts and invalid positions cannot corrupt the wider world', () => {
-  const s = createMatch(); const hero = getHero(s, 0), mana = hero.mana!;
-  assert.equal(applyCommand(s, 0, { type: 'skill', slot: 1, x: hero.x, y: lane }).ok, true);
-  assert.ok(hero.shield! > 0); assert.ok(hero.mana! < mana);
-  assert.equal(applyCommand(s, 0, { type: 'skill', slot: 1, x: hero.x, y: lane }).ok, false);
-  assert.equal(applyCommand(s, 0, { type: 'move', x: Infinity, y: NaN }).ok, false);
-  applyCommand(s, 0, { type: 'move', x: 999999, y: -999999 }); advance(s, 5);
-  assert.ok(Number.isFinite(hero.x) && hero.x <= WORLD.maxX && hero.y >= WORLD.minY);
-  assert.equal(hero.shield, 0);
+test('equipment uses catalog prices and source stats, with six slots at any location or while dead',()=>{
+ const s=fixture(['dain','sylra']),hero=getHero(s,0),sword=ITEMS.find(i=>i.id==='sword')!;place(hero,2000);const damage=hero.damage;
+ buy(s,0,'sword');assert.equal(hero.gold,RULES.startingGold-sword.cost);assert.equal(hero.damage,damage+sword.damage!);assert.equal(applyCommand(s,0,{type:'buy',itemId:'sword'}).ok,false);
+ hero.gold=9999;hero.hp=0;hero.respawnAt=Infinity;for(let i=0;i<5;i++)buy(s,0,'heart');assert.equal(hero.items!.length,6);const gold=hero.gold;assert.equal(applyCommand(s,0,{type:'buy',itemId:'heart'}).ok,false);assert.equal(hero.gold,gold);assert.equal(applyCommand(s,0,{type:'buy',itemId:'missing'}).ok,false);
 });
 
-test('hero kill rewards and purchased equipment survive timed respawn at new spawn', () => {
-  const s = createMatch(['mage', 'knight']); const attacker = getHero(s, 0), victim = getHero(s, 1);
-  applyCommand(s, 1, { type: 'buy', itemId: 'sword' });
-  place(attacker, center); place(victim, center + 100); victim.hp = 5;
-  const before = attacker.gold!;
-  applyCommand(s, 0, { type: 'attack', targetId: victim.id }); stepMatch(s, .05);
-  assert.equal(victim.hp, 0); assert.equal(victim.deaths, 1); assert.equal(attacker.kills, 1); assert.ok(attacker.gold! >= before + 220);
-  assert.equal(applyCommand(s, 1, { type: 'move', x: center, y: lane }).ok, false);
-  place(attacker, WORLD.spawnX[0]); attacker.targetId = null; attacker.orderedTargetId = null; advance(s, 9.1);
-  assert.ok(victim.hp > 0); assert.equal(victim.x, WORLD.spawnX[1]); assert.equal(victim.y, lane);
-  assert.deepEqual(victim.items, ['sword']);
+test('casts enforce learned ranks, mana and cooldown; invalid coordinates never mutate orders',()=>{
+ const s=fixture(),hero=getHero(s,0);place(hero,1800);hero.skillRanks[0]=1;const data=HEROES.sylra.skills[0],mana=hero.mana!;
+ assert.equal(applyCommand(s,0,{type:'skill',slot:0,x:2000,y:lane}).ok,true);close(hero.mana!,mana-data.mana);assert.equal(hero.cooldowns![0],data.cooldown);assert.equal(applyCommand(s,0,{type:'skill',slot:0,x:2000,y:lane}).ok,false);
+ hero.cooldowns![0]=0;hero.mana=0;assert.equal(applyCommand(s,0,{type:'skill',slot:0,x:2000,y:lane}).ok,false);
+ assert.equal(applyCommand(s,0,{type:'move',x:Infinity,y:NaN}).ok,false);assert.equal(applyCommand(s,0,{type:'skill',slot:0,x:NaN,y:lane}).ok,false);assert.equal(hero.moveTarget,null);
+ assert.equal(applyCommand(s,0,{type:'move',x:999999,y:-999999}).ok,true);advance(s,2);assert.ok(Number.isFinite(hero.x)&&hero.x<=WORLD.maxX&&hero.y>=WORLD.minY);
 });
 
-test('tower prioritizes troops then retaliates against skill damage on defending hero', () => {
-  const s = createMatch(['mage', 'knight']); advance(s, 3.1);
-  const attacker = getHero(s, 0), defender = getHero(s, 1), tower = s.units.find(u => u.id === 'tower-1')!;
-  const minion = s.units.find(u => u.team === 0 && u.kind === 'melee')!;
-  place(minion, tower.x - 90); place(attacker, tower.x - 160); place(defender, tower.x - 30); attacker.attackTimer = 5;
-  stepMatch(s, .05); assert.equal(tower.targetId, minion.id);
-  applyCommand(s, 0, { type: 'skill', slot: 0, x: defender.x, y: defender.y }); advance(s, .25);
-  assert.equal(tower.targetId, attacker.id);
+test('kill rewards and equipment persist through a timed full-health respawn',()=>{
+ const s=fixture(),a=getHero(s,0),b=getHero(s,1);buy(s,1,'sword');place(a,1800);place(b,1900);b.hp=1;const gold=a.gold!;attack(s,0,b);until(s,()=>b.hp===0);const deathAt=s.time;
+ assert.equal(b.deaths,1);assert.equal(a.kills,1);close(a.gold!-gold,220+s.time*RULES.passiveGoldPerSecond);assert.equal(applyCommand(s,1,{type:'move',x:2000,y:lane}).ok,false);
+ quiet(a);place(a,WORLD.spawnX[0]);advance(s,RULES.respawnSeconds-.1);assert.equal(b.hp,0);until(s,()=>b.hp>0,.3);assert.ok(s.time>=deathAt+RULES.respawnSeconds);assert.equal(b.x,WORLD.spawnX[1]);assert.equal(b.y,lane);assert.equal(b.hp,b.maxHp);assert.equal(b.mana,b.maxMana);assert.deepEqual(b.items,['sword']);
 });
 
-test('destroying exposed base ends match and freezes simulation', () => {
-  const s = createMatch(['mage', 'knight']); const hero = getHero(s, 0); place(hero, WORLD.baseX[1] - 100);
-  s.units.find(u => u.id === 'tower-1')!.hp = 0; s.units.find(u => u.id === 'base-1')!.hp = 5;
-  applyCommand(s, 0, { type: 'attack', targetId: 'base-1' }); stepMatch(s, .05);
-  assert.equal(s.status, 'finished'); assert.equal(s.winner, 0);
-  const time = s.time; advance(s, 3); assert.equal(s.time, time);
-  assert.equal(applyCommand(s, 0, { type: 'move', x: center, y: lane }).ok, false);
+test('tower fires at allied troops first and retaliates when a source skill hits its defending hero',()=>{
+ const s=fixture(['sylra','dain'],true),a=getHero(s,0),b=getHero(s,1),tower=s.units.find(u=>u.id==='tower-1')!;place(a,tower.x-200);place(b,tower.x-60);const minion=troop(s,'frontline',0,tower.x-90);minion.hp=minion.maxHp=10000;tower.attackTimer=0;
+ stepMatch(s,.05);assert.equal(tower.targetId,minion.id);a.skillRanks[0]=1;assert.equal(applyCommand(s,0,{type:'skill',slot:0,x:b.x,y:b.y}).ok,true);until(s,()=>tower.targetId===a.id,1);assert.ok(b.hp<b.maxHp);
 });
 
-test('bot follows waves and completes a larger-map game against an unattended player', () => {
-  const s = createRawMatch(['knight', 'mage'], [1]); advance(s, 900);
-  assert.equal(s.status, 'finished'); assert.equal(s.winner, 1);
-  assert.ok(s.units.every(u => Number.isFinite(u.hp) && Number.isFinite(u.x) && Number.isFinite(u.y)));
-  assert.ok(s.units.length < 150); assert.ok(s.wave > 5);
+test('destroying an exposed base ends and freezes the match',()=>{
+ const s=fixture(['sylra','dain'],true),hero=getHero(s,0),base=s.units.find(u=>u.id==='base-1')!;place(hero,base.x+90);place(getHero(s,1),1500);s.units.find(u=>u.id==='tower-1')!.hp=0;base.hp=1;attack(s,0,base);until(s,()=>s.status==='finished');
+ assert.equal(s.winner,0);const time=s.time,gold=hero.gold;advance(s,3);assert.equal(s.time,time);assert.equal(hero.gold,gold);assert.equal(applyCommand(s,0,{type:'move',x:1800,y:lane}).ok,false);
 });
 
-test('ground movement ignores enemies and allows lateral kiting within the tower-covered lane; idle does not chase', () => {
-  const s = createMatch(['mage', 'knight']); const hero = getHero(s, 0), enemy = getHero(s, 1);
-  place(hero, center); place(enemy, center + 200); enemy.attackTimer = 100;
-  stepMatch(s, .05); assert.equal(hero.targetId, enemy.id);
-  enemy.x = center + 400; const origin = hero.x;
-  stepMatch(s, .05); assert.equal(hero.x, origin); assert.equal(hero.targetId, null);
-  applyCommand(s, 0, { type: 'attack', targetId: enemy.id }); stepMatch(s, .05); assert.ok(hero.x > origin);
-  applyCommand(s, 0, { type: 'move', x: center, y: lane - 450 }); advance(s, 3);
-  assert.equal(hero.y, WORLD.minY); assert.equal(hero.targetId, null);
+test('bot follows waves to a complete finite match without unbounded troops',()=>{
+ const s=createMatch(['dain','sylra'],[1]);advance(s,1200);assert.equal(s.status,'finished');assert.equal(s.winner,1);assert.ok(s.units.every(u=>Number.isFinite(u.hp)&&Number.isFinite(u.x)&&Number.isFinite(u.y)));assert.ok(s.units.length<150);assert.ok(s.wave>5);
 });
 
-test('targeted slash refuses missing, allied, structure and distant targets without cost', () => {
-  const s = createMatch(); const hero = getHero(s, 0), enemy = getHero(s, 1); place(hero, center); place(enemy, center + 300);
-  const mana = hero.mana!;
-  for (const targetId of [undefined, hero.id, 'tower-1', enemy.id, 'missing']) {
-    assert.equal(applyCommand(s, 0, { type: 'skill', slot: 0, targetId, x: enemy.x, y: enemy.y }).ok, false);
-    assert.equal(hero.mana, mana); assert.equal(hero.cooldowns![0], 0);
-  }
-  place(enemy, center + 100);
-  assert.equal(applyCommand(s, 0, { type: 'skill', slot: 0, targetId: enemy.id, x: enemy.x, y: enemy.y }).ok, true);
-  assert.equal(enemy.hp, enemy.maxHp - 145);
+test('idle heroes do not chase escaped enemies while explicit movement permits kiting',()=>{
+ const s=fixture(),hero=getHero(s,0),enemy=getHero(s,1);place(hero,1800);place(enemy,2000);stepMatch(s,.05);assert.equal(hero.targetId,enemy.id);enemy.x=2300;const x=hero.x;stepMatch(s,.05);assert.equal(hero.x,x);assert.equal(hero.targetId,null);
+ assert.equal(applyCommand(s,0,{type:'attack',targetId:enemy.id}).ok,true);stepMatch(s,.05);assert.ok(hero.x>x);assert.equal(applyCommand(s,0,{type:'move',x:1700,y:WORLD.minY}).ok,true);advance(s,3);assert.equal(hero.y,WORLD.minY);assert.equal(hero.targetId,null);
 });
 
-test('star projectile travels over time, pierces once per unit, and can be dodged', () => {
-  const s = createMatch(['mage', 'knight']); const mage = getHero(s, 0), enemy = getHero(s, 1); place(mage, center); place(enemy, center + 400);
-  mage.attackTimer = 100; enemy.attackTimer = 100;
-  applyCommand(s, 0, { type: 'skill', slot: 0, x: enemy.x, y: enemy.y });
-  assert.equal(enemy.hp, enemy.maxHp); assert.equal(s.projectiles.length, 1);
-  advance(s, .2); assert.equal(enemy.hp, enemy.maxHp); assert.ok(s.projectiles[0].x > mage.x);
-  advance(s, .4); assert.equal(enemy.hp, enemy.maxHp - 125);
-  advance(s, .5); assert.equal(enemy.hp, enemy.maxHp - 125); assert.equal(s.projectiles.length, 0);
-  const dodge = createMatch(['mage', 'knight']), caster = getHero(dodge, 0), runner = getHero(dodge, 1);
-  place(caster, center); place(runner, center + 400); caster.attackTimer = 100; runner.attackTimer = 100;
-  applyCommand(dodge, 0, { type: 'skill', slot: 0, x: runner.x, y: runner.y });
-  applyCommand(dodge, 1, { type: 'move', x: runner.x, y: lane + 400 }); advance(dodge, 1);
-  assert.equal(runner.hp, runner.maxHp);
+test('summoners have independent no-mana cooldowns retained across death',()=>{
+ const s=fixture(),hero=getHero(s,0);place(hero,1800);hero.hp=100;hero.mana=0;hero.cooldowns=[5,6,7,8];
+ assert.equal(applyCommand(s,0,{type:'summoner',slot:'heal',x:hero.x,y:lane}).ok,true);assert.ok(hero.hp>100);assert.equal(hero.summonerCooldowns!.heal,SUMMONERS.heal.cooldown);
+ assert.equal(applyCommand(s,0,{type:'summoner',slot:'flash',x:2200,y:lane}).ok,true);close(hero.x,1800+SUMMONERS.flash.range);assert.equal(hero.summonerCooldowns!.flash,SUMMONERS.flash.cooldown);assert.deepEqual(hero.cooldowns,[5,6,7,8]);assert.equal(hero.mana,0);
+ assert.equal(applyCommand(s,0,{type:'summoner',slot:'heal',x:hero.x,y:lane}).ok,false);hero.hp=0;hero.respawnAt=s.time+RULES.respawnSeconds;advance(s,RULES.respawnSeconds+.1);assert.ok(hero.hp>0);assert.ok(hero.summonerCooldowns!.heal>SUMMONERS.heal.cooldown-RULES.respawnSeconds-1);assert.ok(hero.summonerCooldowns!.flash>SUMMONERS.flash.cooldown-RULES.respawnSeconds-1);
 });
 
-test('nova has a dodge window, impacts after delay and slows only targets still inside', () => {
-  const s = createMatch(['mage', 'knight']); const mage = getHero(s, 0), enemy = getHero(s, 1); place(mage, center); place(enemy, center + 400);
-  mage.attackTimer = 100; enemy.attackTimer = 100;
-  applyCommand(s, 0, { type: 'skill', slot: 1, x: enemy.x, y: enemy.y }); advance(s, .6);
-  assert.equal(enemy.hp, enemy.maxHp); assert.equal(s.projectiles[0].kind, 'nova');
-  advance(s, .1); assert.equal(enemy.hp, enemy.maxHp - 100); assert.ok(enemy.slowUntil! > s.time);
-  const dodge = createMatch(['mage', 'knight']), caster = getHero(dodge, 0), runner = getHero(dodge, 1);
-  place(caster, center); place(runner, center + 400); runner.attackTimer = 100; caster.attackTimer = 100;
-  applyCommand(dodge, 0, { type: 'skill', slot: 1, x: runner.x, y: runner.y });
-  applyCommand(dodge, 1, { type: 'summoner', slot: 'flash', x: runner.x, y: lane + 400 }); advance(dodge, .7);
-  assert.equal(runner.hp, runner.maxHp); assert.equal(runner.slowUntil, undefined);
+test('skill points spend once, basic ranks cap at five, and R gates at four seven and ten',()=>{
+ const s=createMatch(),hero=getHero(s,0);assert.equal(hero.level,1);assert.equal(hero.skillPoints,1);assert.deepEqual(hero.skillRanks,[0,0,0,0]);const mana=hero.mana;
+ assert.equal(applyCommand(s,0,{type:'skill',slot:0,x:hero.x+100,y:lane}).ok,false);assert.equal(hero.mana,mana);assert.equal(applyCommand(s,0,{type:'upgrade',slot:3}).ok,false);assert.equal(hero.skillPoints,1);assert.equal(applyCommand(s,0,{type:'upgrade',slot:0}).ok,true);assert.equal(hero.skillPoints,0);assert.equal(applyCommand(s,0,{type:'upgrade',slot:1}).ok,false);
+ hero.skillPoints=20;for(const level of [4,7,10]){hero.level=level;assert.equal(applyCommand(s,0,{type:'upgrade',slot:3}).ok,true);assert.equal(applyCommand(s,0,{type:'upgrade',slot:3}).ok,false);}while(hero.skillRanks[0]<5)assert.equal(applyCommand(s,0,{type:'upgrade',slot:0}).ok,true);assert.equal(applyCommand(s,0,{type:'upgrade',slot:0}).ok,false);
 });
 
-test('shield, charge and hero blink keep distinct combat and mobility effects', () => {
-  const s = createMatch(['knight', 'mage']); const knight = getHero(s, 0), mage = getHero(s, 1); place(knight, center); place(mage, center + 120);
-  applyCommand(s, 0, { type: 'skill', slot: 1, x: knight.x, y: lane }); assert.equal(knight.shield, 230);
-  applyCommand(s, 0, { type: 'skill', slot: 2, x: mage.x, y: lane }); assert.equal(knight.x, center + 120); assert.equal(mage.hp, mage.maxHp - 100);
-  const before = mage.hp;
-  applyCommand(s, 1, { type: 'skill', slot: 2, x: center + 600, y: lane }); assert.equal(mage.x, center + 330); assert.equal(mage.hp, before + 80);
+test('nearby XP levels a hero with source growth and stops at ten without granting last-hit gold',()=>{
+ const s=fixture(['dain','sylra']),hero=getHero(s,0);place(hero,1800);const ally=troop(s,'xp-ally',0,1900);ally.damage=999;const initialHp=hero.maxHp,initialDamage=hero.damage,initialGold=hero.gold!;
+ for(let i=0;i<90;i++){const victim=troop(s,`xp-${i}`,1,1930);victim.hp=1;ally.attackTimer=0;ally.targetId=victim.id;until(s,()=>victim.hp===0,.5);if(i===2){assert.equal(hero.level,2);assert.equal(hero.xp,6);assert.equal(hero.skillPoints,2);assert.equal(hero.maxHp,initialHp+SOURCE_HEROES.dain.growth.hp);assert.equal(hero.damage,initialDamage+SOURCE_HEROES.dain.growth.ad);}}
+ assert.equal(hero.lastHits,0);close(hero.gold!-initialGold,s.time*RULES.passiveGoldPerSecond);assert.equal(hero.level,10);assert.equal(hero.xp,0);assert.equal(hero.skillPoints,10);assert.equal(hero.maxHp,initialHp+9*SOURCE_HEROES.dain.growth.hp);assert.equal(xpForNextLevel(2),165);
 });
 
-test('D heal and F flash have independent no-mana cooldowns that persist across respawn', () => {
-  const s = createMatch(); const hero = getHero(s, 0); place(hero, center); hero.hp = 400; hero.mana = 0; hero.cooldowns = [5, 6, 7, 8];
-  applyCommand(s, 0, { type: 'summoner', slot: 'heal', x: hero.x, y: lane }); assert.equal(hero.hp, 660); assert.equal(hero.summonerCooldowns!.heal, 90);
-  applyCommand(s, 0, { type: 'summoner', slot: 'flash', x: center + 600, y: lane }); assert.equal(hero.x, center + 340); assert.equal(hero.summonerCooldowns!.flash, 120);
-  assert.deepEqual(hero.cooldowns, [5, 6, 7, 8]); assert.equal(hero.mana, 0);
-  assert.equal(applyCommand(s, 0, { type: 'summoner', slot: 'heal', x: hero.x, y: lane }).ok, false);
-  hero.hp = 0; hero.respawnAt = s.time + 9; advance(s, 9.1);
-  assert.ok(hero.hp > 0); assert.ok(hero.summonerCooldowns!.heal > 80); assert.ok(hero.summonerCooldowns!.flash > 110);
+test('attack move kills an encountered enemy then resumes its ground destination',()=>{
+ const s=fixture(),hero=getHero(s,0),enemy=getHero(s,1);place(hero,1800);place(enemy,2150);enemy.hp=1;hero.attackTimer=0;assert.equal(applyCommand(s,0,{type:'attackMove',x:2800,y:lane}).ok,true);stepMatch(s,.05);assert.equal(hero.targetId,enemy.id);
+ until(s,()=>enemy.hp===0);advance(s,1);assert.equal(hero.kills,1);assert.ok(hero.x>1800,'after the kill the hero resumes moving along its ground order');assert.equal(hero.attackMoveTarget?.x,2800);
 });
 
-test('initial skill point, unlearned refusal, upgrade caps and R level gates are authoritative', () => {
-  const s = createRawMatch(); const hero = getHero(s, 0);
-  assert.equal(hero.level, 1); assert.equal(hero.skillPoints, 1); assert.deepEqual(hero.skillRanks, [0, 0, 0, 0]);
-  const mana = hero.mana!;
-  assert.equal(applyCommand(s, 0, { type: 'skill', slot: 1, x: hero.x, y: lane }).ok, false); assert.equal(hero.mana, mana);
-  assert.equal(applyCommand(s, 0, { type: 'upgrade', slot: 3 }).ok, false); assert.equal(hero.skillPoints, 1);
-  assert.equal(applyCommand(s, 0, { type: 'upgrade', slot: 0 }).ok, true); assert.equal(hero.skillRanks[0], 1); assert.equal(hero.skillPoints, 0);
-  assert.equal(applyCommand(s, 0, { type: 'upgrade', slot: 1 }).ok, false);
-  hero.skillPoints = 10; hero.level = 3;
-  assert.equal(applyCommand(s, 0, { type: 'upgrade', slot: 3 }).ok, false);
-  hero.level = 4; assert.equal(applyCommand(s, 0, { type: 'upgrade', slot: 3 }).ok, true);
-  assert.equal(applyCommand(s, 0, { type: 'upgrade', slot: 3 }).ok, false);
-  hero.level = 8; assert.equal(applyCommand(s, 0, { type: 'upgrade', slot: 3 }).ok, true);
-  assert.equal(applyCommand(s, 0, { type: 'upgrade', slot: 3 }).ok, false);
-  applyCommand(s, 0, { type: 'upgrade', slot: 0 }); applyCommand(s, 0, { type: 'upgrade', slot: 0 });
-  assert.equal(hero.skillRanks[0], 3); assert.equal(applyCommand(s, 0, { type: 'upgrade', slot: 0 }).ok, false);
+test('right click movement cancels attack move and retreats without starting an attack',()=>{
+ const s=fixture(),hero=getHero(s,0),enemy=getHero(s,1);place(hero,1800);place(enemy,2000);applyCommand(s,0,{type:'attackMove',x:2700,y:lane});stepMatch(s,.05);assert.equal(hero.targetId,enemy.id);const hp=enemy.hp;
+ hero.attackTimer=0;applyCommand(s,0,{type:'move',x:1400,y:WORLD.minY});advance(s,1);assert.equal(hero.attackMoveTarget,null);assert.equal(hero.targetId,null);assert.ok(hero.x<1800);assert.ok(hero.y<lane);assert.equal(enemy.hp,hp);
 });
 
-test('nearby troop kills grant XP without last-hit gold, levels add points, maximum level is 10', () => {
-  const s = createRawMatch(); advance(s, 3.1);
-  const hero = getHero(s, 0); place(hero, center);
-  const ally = s.units.find(u => u.team === 0 && u.kind === 'melee')!; place(ally, center + 380); ally.damage = 99999;
-  const template = s.units.find(u => u.team === 1 && u.kind === 'melee')!;
-  const initialGold = hero.gold!, initialHp = hero.maxHp, initialDamage = hero.damage;
-  for (let i = 0; i < 3; i++) {
-    const victim = { ...template, id: `xp-victim-${i}`, x: center + 400, y: lane, hp: 1, targetId: null };
-    s.units.push(victim); ally.targetId = victim.id; ally.attackTimer = 0; stepMatch(s, .05);
-  }
-  assert.equal(hero.lastHits, 0); assert.ok(hero.gold! < initialGold + 1);
-  assert.equal(hero.level, 2); assert.equal(hero.xp, 6); assert.equal(hero.skillPoints, 2);
-  assert.equal(hero.maxHp, initialHp + 80); assert.equal(hero.damage, initialDamage + 5); assert.equal(xpForNextLevel(2), 165);
-  for (let i = 3; i < 90; i++) {
-    const victim = { ...template, id: `xp-victim-${i}`, x: center + 400, y: lane, hp: 1, targetId: null };
-    s.units.push(victim); ally.targetId = victim.id; ally.attackTimer = 0; stepMatch(s, .05);
-  }
-  assert.equal(hero.level, 10); assert.equal(hero.xp, 0); assert.equal(hero.skillPoints, 10);
-  assert.equal(hero.maxHp, initialHp + 9 * 80); assert.equal(hero.lastHits, 0);
+test('source natural regeneration is uniform at the base and in the lane, with no fountain bonus',()=>{
+ const s=fixture(['dain','dain']),a=getHero(s,0),b=getHero(s,1),source=SOURCE_HEROES.dain.base;for(const u of [a,b]){u.hp=100;u.mana=0;u.hpRegen=source.hpRegen;u.manaRegen=source.manaRegen;}place(b,3000);advance(s,1);
+ close(a.hp,100+source.hpRegen);close(b.hp,a.hp);close(a.mana!,source.manaRegen);close(b.mana!,a.mana!);
 });
 
-test('ranked normals scale and knight ultimate leaps with missing-health execution damage', () => {
-  const s = createMatch(['knight', 'mage']); const knight = getHero(s, 0), mage = getHero(s, 1);
-  place(knight, center); place(mage, center + 100); knight.skillRanks[0] = 3;
-  applyCommand(s, 0, { type: 'skill', slot: 0, targetId: mage.id, x: mage.x, y: lane });
-  assert.equal(mage.hp, mage.maxHp - 217.5); assert.ok(Math.abs(knight.cooldowns![0] - 4.8) < 1e-8);
-  knight.skillRanks[3] = 1; knight.level = 4; place(mage, center + 400); const before = mage.hp;
-  applyCommand(s, 0, { type: 'skill', slot: 3, targetId: mage.id, x: mage.x, y: lane });
-  assert.equal(knight.x, mage.x - 65); assert.equal(mage.hp, before - 260 - (mage.maxHp - before) * .15); assert.equal(knight.cooldowns![3], 65);
+test('full potion restores both resources gradually over eight seconds independent of natural regeneration',()=>{
+ const s=fixture(),hero=getHero(s,0);buy(s,0,'potion');hero.hp=100;hero.mana=0;assert.equal(applyCommand(s,0,{type:'usePotion'}).ok,true);assert.equal(hero.hp,100);assert.equal(hero.mana,0);assert.equal(hero.potionEffect!.potency,1);
+ advance(s,4);close(hero.hp,100+hero.maxHp*.25);close(hero.mana!,hero.maxMana!*.25);advance(s,4);close(hero.hp,100+hero.maxHp*.5);close(hero.mana!,hero.maxMana!*.5);assert.equal(hero.potionEffect,undefined);
 });
 
-test('mage ultimate gives a one-second warning before large area damage and can be dodged', () => {
-  const s = createMatch(['mage', 'knight']); const mage = getHero(s, 0), enemy = getHero(s, 1); place(mage, center); place(enemy, center + 600);
-  mage.skillRanks[3] = 1; mage.level = 4; mage.attackTimer = 100; enemy.attackTimer = 100;
-  applyCommand(s, 0, { type: 'skill', slot: 3, x: enemy.x, y: lane }); advance(s, .9);
-  assert.equal(enemy.hp, enemy.maxHp); assert.equal(s.projectiles[0].radius, 260);
-  advance(s, .15); assert.equal(enemy.hp, enemy.maxHp - 300);
-  const dodge = createMatch(['mage', 'knight']), caster = getHero(dodge, 0), runner = getHero(dodge, 1);
-  place(caster, center); place(runner, center + 600); caster.skillRanks[3] = 2; caster.level = 8; caster.attackTimer = 100; runner.attackTimer = 100;
-  applyCommand(dodge, 0, { type: 'skill', slot: 3, x: runner.x, y: lane });
-  applyCommand(dodge, 1, { type: 'summoner', slot: 'flash', x: runner.x + 400, y: lane }); advance(dodge, 1.1);
-  assert.equal(runner.hp, runner.maxHp); assert.equal(caster.cooldowns![3] < 55, true);
+test('combat potion retains twenty percent potency after the combat window expires',()=>{
+ const s=fixture(),hero=getHero(s,0);buy(s,0,'potion');place(hero,1800);hero.hp=100;hero.mana=0;hero.lastCombatAt=s.time;assert.equal(applyCommand(s,0,{type:'usePotion'}).ok,true);assert.equal(hero.potionEffect!.potency,.2);
+ advance(s,8);close(hero.hp,100+hero.maxHp*.1);close(hero.mana!,hero.maxMana!*.1);assert.equal(hero.potionEffect,undefined);
 });
 
-test('attack-move engages a nearby enemy and resumes its ground goal after the kill', () => {
-  const s = createMatch(['mage', 'knight']); s.nextWave = Infinity;
-  const hero = getHero(s, 0), enemy = getHero(s, 1); place(hero, center); place(enemy, center + 350); enemy.hp = 5; enemy.attackTimer = 100;
-  assert.equal(applyCommand(s, 0, { type: 'attackMove', x: center + 800, y: lane }).ok, true);
-  stepMatch(s, .05); assert.equal(hero.targetId, enemy.id); assert.ok(hero.x > center);
-  advance(s, 3); assert.equal(enemy.hp, 0); assert.equal(hero.kills, 1);
-  assert.ok(hero.x > center + 350); assert.equal(hero.attackMoveTarget?.x, center + 800);
+test('a shield absorbed attack reduces only remaining full potion ticks to combat potency',()=>{
+ const s=fixture(),hero=getHero(s,0),enemy=getHero(s,1);buy(s,0,'potion');place(hero,1800);place(enemy,1900);hero.hp=100;hero.mana=0;enemy.statuses=[{kind:'shield',until:30,remaining:1000}];assert.equal(applyCommand(s,0,{type:'usePotion'}).ok,true);advance(s,1);assert.equal(hero.potionEffect!.potency,1);
+ const enemyHp=enemy.hp;attack(s,0,enemy);until(s,()=>hero.potionEffect?.potency===.2);assert.equal(enemy.hp,enemyHp);assert.ok(enemy.shield!<1000);assert.equal(hero.lastCombatAt,s.time);assert.equal(enemy.lastCombatAt,s.time);quiet(hero);const hp=hero.hp,mana=hero.mana!;advance(s,1);close(hero.hp-hp,hero.maxHp*.5/8*.2);close(hero.mana!-mana,hero.maxMana!*.5/8*.2);
 });
 
-test('right-click movement cancels attack-move and escapes nearby enemies without firing', () => {
-  const s = createMatch(['mage', 'knight']); s.nextWave = Infinity;
-  const hero = getHero(s, 0), enemy = getHero(s, 1); place(hero, center); place(enemy, center + 200); hero.attackTimer = 10; enemy.attackTimer = 100;
-  applyCommand(s, 0, { type: 'attackMove', x: center + 800, y: lane }); stepMatch(s, .05);
-  assert.equal(hero.targetId, enemy.id);
-  hero.attackTimer = 0; const hp = enemy.hp;
-  applyCommand(s, 0, { type: 'move', x: center - 400, y: lane - 300 }); advance(s, 1);
-  assert.equal(hero.attackMoveTarget, null); assert.equal(hero.targetId, null);
-  assert.ok(hero.x < center); assert.ok(hero.y < lane); assert.equal(enemy.hp, hp);
+test('potion stocks are separate from six equipment slots and invalid use never consumes stock',()=>{
+ const s=fixture(),hero=getHero(s,0);hero.gold=9999;for(let i=0;i<6;i++)buy(s,0,'sword');for(let i=0;i<3;i++)buy(s,0,'potion');assert.equal(hero.items!.length,6);assert.equal(hero.potions,3);const gold=hero.gold;
+ assert.equal(applyCommand(s,0,{type:'buy',itemId:'potion'}).ok,false);assert.equal(hero.gold,gold);assert.equal(applyCommand(s,0,{type:'usePotion'}).ok,false);assert.equal(hero.potions,3);hero.hp=0;assert.equal(applyCommand(s,0,{type:'usePotion'}).ok,false);assert.equal(hero.potions,3);
+ hero.hp=hero.maxHp;hero.mana!-=100;hero.lastCombatAt=s.time-RULES.potionCombatWindow;assert.equal(applyCommand(s,0,{type:'usePotion'}).ok,true);assert.equal(hero.potionEffect!.potency,1);assert.equal(hero.potions,2);assert.equal(applyCommand(s,0,{type:'usePotion'}).ok,false);assert.equal(hero.potions,2);
 });
 
-test('potion restores both health and mana gradually for eight seconds without a fountain bonus', () => {
-  const s = createRawMatch(); s.nextWave = Infinity; const hero = getHero(s, 0);
-  hero.hp = 100; hero.mana = 0;
-  advance(s, 1); assert.equal(hero.hp, 100); assert.ok(Math.abs(hero.mana! - 7) < 1e-8);
-  hero.mana = 0;
-  applyCommand(s, 0, { type: 'buy', itemId: 'potion' });
-  assert.equal(applyCommand(s, 0, { type: 'usePotion' }).ok, true);
-  assert.equal(hero.hp, 100); assert.equal(hero.mana, 0); assert.equal(hero.potionEffect!.potency, 1);
-  advance(s, 4); assert.ok(Math.abs(hero.hp - (100 + hero.maxHp * .25)) < 1e-8); assert.ok(Math.abs(hero.mana! - (hero.maxMana! * .25 + 28)) < 1e-8);
-  advance(s, 4); assert.ok(Math.abs(hero.hp - (100 + hero.maxHp * .5)) < 1e-8); assert.ok(Math.abs(hero.mana! - (hero.maxMana! * .5 + 56)) < 1e-8);
-  assert.equal(hero.potionEffect, undefined);
+test('death clears potion effects without refunding stock and shop remains available while dead',()=>{
+ const s=fixture(['dain','sylra']),hero=getHero(s,0),enemy=getHero(s,1);buy(s,0,'potion');place(hero,1800);place(enemy,1900);hero.hp=1;assert.equal(applyCommand(s,0,{type:'usePotion'}).ok,true);attack(s,1,hero);until(s,()=>hero.hp===0);assert.equal(hero.potionEffect,undefined);assert.equal(hero.potions,0);buy(s,0,'potion');assert.equal(hero.potions,1);
 });
 
-test('combat potion gives twenty percent potency and never improves after combat expires', () => {
-  const s = createRawMatch(); s.nextWave = Infinity; const hero = getHero(s, 0); place(hero, center);
-  hero.hp = 100; hero.mana = 0; hero.lastCombatAt = s.time;
-  applyCommand(s, 0, { type: 'buy', itemId: 'potion' }); applyCommand(s, 0, { type: 'usePotion' });
-  assert.equal(hero.potionEffect!.potency, .2);
-  advance(s, 8); assert.ok(Math.abs(hero.hp - (100 + hero.maxHp * .1)) < 1e-8); assert.ok(Math.abs(hero.mana! - (hero.maxMana! * .1 + 56)) < 1e-8);
-  assert.equal(hero.potionEffect, undefined);
+test('ordinary movement crosses the narrow bridge in both directions without walking on water',()=>{
+ const s=fixture(),hero=getHero(s,0);place(hero,2520,835);for(const goal of [{x:2180,y:835},{x:2520,y:835}]){applyCommand(s,0,{type:'move',...goal});let crossed=false;for(let i=0;i<220;i++){stepMatch(s,.05);assert.equal(isWater(hero),false);if(hero.x>TERRAIN.river.minX&&hero.x<TERRAIN.river.maxX){crossed=true;assert.ok(hero.y>=TERRAIN.bridge.minY&&hero.y<=TERRAIN.bridge.maxY);}}assert.ok(crossed);assert.ok(Math.hypot(hero.x-goal.x,hero.y-goal.y)<1);}
 });
 
-test('fresh combat reduces only remaining full-potion ticks, even when shields absorb the hit', () => {
-  const s = createRawMatch(['mage', 'knight']); s.nextWave = Infinity;
-  const hero = getHero(s, 0), enemy = getHero(s, 1); place(hero, center); place(enemy, center + 200);
-  hero.hp = 100; hero.mana = 0; hero.attackTimer = 100; enemy.attackTimer = 100; enemy.shield = 1000;
-  applyCommand(s, 0, { type: 'buy', itemId: 'potion' }); applyCommand(s, 0, { type: 'usePotion' }); advance(s, 1);
-  assert.equal(hero.potionEffect!.potency, 1);
-  const enemyHp = enemy.hp; hero.attackTimer = 0;
-  applyCommand(s, 0, { type: 'attack', targetId: enemy.id }); stepMatch(s, .05);
-  assert.equal(enemy.hp, enemyHp); assert.equal(hero.lastCombatAt, s.time); assert.equal(enemy.lastCombatAt, s.time); assert.equal(hero.potionEffect!.potency, .2);
-  const hp = hero.hp, mana = hero.mana!;
-  advance(s, 1); assert.ok(Math.abs(hero.hp - hp - hero.maxHp * .5 / 8 * .2) < 1e-8); assert.ok(Math.abs(hero.mana! - mana - (hero.maxMana! * .5 / 8 * .2 + 7)) < 1e-8);
+test('chase and attack move route through the bridge while autonomous troops keep crossing',()=>{
+ for(const type of ['attackMove','attack'] as const){const s=fixture(['dain','sylra']),hero=getHero(s,0),enemy=getHero(s,1);place(hero,2520,1165);place(enemy,2050,1080);enemy.hp=enemy.maxHp=10000;assert.equal(applyCommand(s,0,type==='attack'?{type:'attack',targetId:enemy.id}:{type:'attackMove',x:2050,y:1080}).ok,true);for(let i=0;i<150;i++){stepMatch(s,.05);assert.equal(isWater(hero),false);}assert.ok(hero.x<TERRAIN.river.minX);}
+ const s=createMatch();advance(s,40);assert.ok(s.units.some(u=>(u.kind==='melee'||u.kind==='ranged')&&Math.abs(u.x-WORLD.width/2)<300));assert.ok(s.units.every(u=>!isWater(u)));
 });
 
-test('potion stock is separate from full equipment, capped at three, and invalid uses consume nothing', () => {
-  const s = createRawMatch(); s.nextWave = Infinity; const hero = getHero(s, 0); place(hero, center); hero.gold = 9999;
-  for (let i = 0; i < 6; i++) assert.equal(applyCommand(s, 0, { type: 'buy', itemId: 'sword' }).ok, true);
-  for (let i = 0; i < 3; i++) assert.equal(applyCommand(s, 0, { type: 'buy', itemId: 'potion' }).ok, true);
-  assert.equal(hero.items!.length, 6); assert.equal(hero.potions, 3);
-  const gold = hero.gold!; assert.equal(applyCommand(s, 0, { type: 'buy', itemId: 'potion' }).ok, false); assert.equal(hero.gold, gold);
-  assert.equal(applyCommand(s, 0, { type: 'usePotion' }).ok, false); assert.equal(hero.potions, 3);
-  hero.hp = 0; assert.equal(applyCommand(s, 0, { type: 'usePotion' }).ok, false); assert.equal(hero.potions, 3);
-  hero.hp = hero.maxHp; hero.mana! -= 100; hero.lastCombatAt = -5;
-  assert.equal(applyCommand(s, 0, { type: 'usePotion' }).ok, true); assert.equal(hero.potionEffect!.potency, 1); assert.equal(hero.potions, 2);
-  assert.equal(applyCommand(s, 0, { type: 'usePotion' }).ok, false); assert.equal(hero.potions, 2);
-  hero.hp = 0; hero.respawnAt = s.time + 9; delete hero.potionEffect;
-  assert.equal(applyCommand(s, 0, { type: 'buy', itemId: 'potion' }).ok, true); assert.equal(hero.potions, 3);
+test('displacements cross water only with legal dry endpoints and cannot gain distance',()=>{
+ const from={x:2300,y:835};for(const range of [210,230,340]){const p=displacementEndpoint(from,{x:2700,y:835},range);assert.ok(p.x>=TERRAIN.river.maxX);assert.equal(isWater(p),false);assert.ok(Math.hypot(p.x-from.x,p.y-from.y)<=range+1e-8);}const stop=displacementEndpoint({x:2200,y:835},{x:2600,y:835},210);assert.ok(Math.abs(stop.x-TERRAIN.river.minX)<1e-6);assert.equal(isWater(stop),false);assert.equal(displacementEndpoint({x:2300,y:lane},{x:2400,y:lane},210).x,2400);
+ const s=fixture(),hero=getHero(s,0);place(hero,from.x,from.y);assert.equal(applyCommand(s,0,{type:'summoner',slot:'flash',x:2700,y:835}).ok,true);assert.ok(hero.x>=TERRAIN.river.maxX);assert.equal(isWater(hero),false);
 });
 
-test('death clears an active potion without refunding its consumed stock', () => {
-  const s = createRawMatch(['knight', 'mage']); s.nextWave = Infinity;
-  const hero = getHero(s, 0), enemy = getHero(s, 1); place(hero, center); place(enemy, center + 200);
-  hero.hp = 1; hero.attackTimer = 100; enemy.attackTimer = 0;
-  applyCommand(s, 0, { type: 'buy', itemId: 'potion' }); applyCommand(s, 0, { type: 'usePotion' });
-  applyCommand(s, 1, { type: 'attack', targetId: hero.id }); stepMatch(s, .05);
-  assert.equal(hero.hp, 0); assert.equal(hero.potionEffect, undefined); assert.equal(hero.potions, 0);
+test('bush heroes stay hidden even in the same bush and guessed targeted attacks fail',()=>{
+ const s=fixture(),hero=getHero(s,0),enemy=getHero(s,1);place(hero,2180,835);place(enemy,2200,835);stepMatch(s,.05);assert.equal(hero.brushId,TERRAIN.bushes[0].id);assert.equal(bushAt(hero)?.id,hero.brushId);assert.equal(isUnitVisibleToTeam(s,hero,0),true);assert.equal(isUnitVisibleToTeam(s,hero,1),false);assert.equal(isUnitVisibleToTeam(s,enemy,0),false);assert.equal(applyCommand(s,0,{type:'attack',targetId:enemy.id}).ok,false);applyCommand(s,0,{type:'attackMove',x:hero.x,y:hero.y});stepMatch(s,.05);assert.equal(hero.targetId,null);
 });
 
-test('ordinary movement routes diagonal orders across the narrow bridge in both directions without entering water', () => {
-  const s = createMatch(['mage', 'knight']); s.nextWave = Infinity; const hero = getHero(s, 0); place(hero, 2520, 835);
-  for (const goal of [{ x: 2180, y: 835 }, { x: 2520, y: 835 }]) {
-    applyCommand(s, 0, { type: 'move', ...goal }); let crossedBridge = false;
-    for (let i = 0; i < 220; i++) {
-      stepMatch(s, .05); assert.equal(isWater(hero), false);
-      if (hero.x > TERRAIN.river.minX && hero.x < TERRAIN.river.maxX) {
-        crossedBridge = true; assert.ok(hero.y >= TERRAIN.bridge.minY && hero.y <= TERRAIN.bridge.maxY);
-      }
-    }
-    assert.ok(crossedBridge); assert.ok(Math.hypot(hero.x - goal.x, hero.y - goal.y) < 1);
-  }
+test('blind area shield hits reveal the victim for three seconds without revealing the caster',()=>{
+ const s=fixture(['dain','sylra']),hero=getHero(s,0),enemy=getHero(s,1);place(hero,2180,835);place(enemy,2200,835);hero.statuses=[{kind:'shield',until:30,remaining:1000}];enemy.skillRanks[1]=1;const hp=hero.hp;assert.equal(applyCommand(s,1,{type:'skill',slot:1,x:hero.x,y:hero.y}).ok,true);until(s,()=>isUnitVisibleToTeam(s,hero,1));assert.equal(hero.hp,hp);assert.ok(hero.shield!<1000);assert.equal(isUnitVisibleToTeam(s,enemy,0),false);assert.ok(hero.revealedUntil!>s.time+2.9);
+ s.projectiles=[];hero.statuses=hero.statuses?.filter(st=>st.kind!=='dot');advance(s,3.1);assert.equal(isUnitVisibleToTeam(s,hero,1),false);place(hero,2050,835);assert.equal(isUnitVisibleToTeam(s,hero,1),true);
 });
 
-test('attack-move and chasing route through the bridge, while troops keep the center lane passable', () => {
-  for (const kind of ['attackMove', 'attack'] as const) {
-    const s = createMatch(['knight', 'mage']); s.nextWave = Infinity; const hero = getHero(s, 0), enemy = getHero(s, 1);
-    place(hero, 2520, 1165); place(enemy, 2180, 1080); enemy.attackTimer = 100;
-    applyCommand(s, 0, kind === 'attack' ? { type: 'attack', targetId: enemy.id } : { type: 'attackMove', x: 2180, y: 1080 });
-    for (let i = 0; i < 150; i++) { stepMatch(s, .05); assert.equal(isWater(hero), false); }
-    assert.ok(hero.x < TERRAIN.river.minX);
-  }
-  const s = createRawMatch(); advance(s, 40);
-  assert.ok(s.units.some(u => (u.kind === 'melee' || u.kind === 'ranged') && Math.abs(u.x - WORLD.width / 2) < 300));
-  assert.ok(s.units.every(u => !isWater(u)));
+test('directional source projectiles can hit and reveal an unseen hero without a target lock',()=>{
+ const s=fixture(),hero=getHero(s,0),enemy=getHero(s,1);place(hero,2100,835);place(enemy,2180,835);hero.skillRanks[0]=1;assert.equal(isUnitVisibleToTeam(s,enemy,0),false);assert.equal(applyCommand(s,0,{type:'skill',slot:0,x:enemy.x,y:enemy.y}).ok,true);until(s,()=>enemy.hp<enemy.maxHp,1);assert.equal(isUnitVisibleToTeam(s,enemy,0),true);
 });
 
-test('displacements cross the water when long enough, but cannot land inside it or gain extra distance', () => {
-  const from = { x: 2300, y: 835 };
-  for (const range of [210, 230, 340]) {
-    const p = displacementEndpoint(from, { x: 2700, y: 835 }, range);
-    assert.ok(p.x >= TERRAIN.river.maxX); assert.equal(isWater(p), false); assert.ok(Math.hypot(p.x - from.x, p.y - from.y) <= range + 1e-8);
-  }
-  const stopped = displacementEndpoint({ x: 2200, y: 835 }, { x: 2600, y: 835 }, 210);
-  assert.ok(Math.abs(stopped.x - TERRAIN.river.minX) < 1e-6); assert.equal(isWater(stopped), false);
-  const bridge = displacementEndpoint({ x: 2300, y: WORLD.laneY }, { x: 2400, y: WORLD.laneY }, 210);
-  assert.equal(bridge.x, 2400); assert.equal(isWater(bridge), false);
-  const s = createMatch(['mage', 'knight']); s.nextWave = Infinity; const hero = getHero(s, 0); place(hero, from.x, from.y);
-  applyCommand(s, 0, { type: 'skill', slot: 2, x: 2700, y: 835 }); assert.ok(hero.x >= TERRAIN.river.maxX); assert.equal(isWater(hero), false);
+test('circular vision includes its exact edge, rejects distant guesses and moves back on respawn',()=>{
+ const s=fixture(),hero=getHero(s,0),enemy=getHero(s,1);place(hero,1800);place(enemy,1800+RULES.visionRadius);assert.equal(isPointInTeamVision(s,enemy,0),true);assert.equal(isUnitVisibleToTeam(s,enemy,0),true);enemy.x+=.01;assert.equal(isPointInTeamVision(s,enemy,0),false);assert.equal(isUnitVisibleToTeam(s,enemy,0),false);assert.equal(applyCommand(s,0,{type:'attack',targetId:enemy.id}).ok,false);const ally=troop(s,'distant-ally',0,4000);assert.equal(isUnitVisibleToTeam(s,ally,0),false);
+ hero.hp=0;hero.respawnAt=s.time+RULES.respawnSeconds;assert.equal(isPointInTeamVision(s,{x:1800+RULES.visionRadius,y:lane},0),true);advance(s,RULES.respawnSeconds+.1);assert.equal(hero.x,WORLD.spawnX[0]);assert.equal(isPointInTeamVision(s,{x:1800,y:lane},0),false);
 });
 
-test('bush heroes remain hidden even from an enemy in the same bush, so targeted attacks and skills cannot lock them', () => {
-  const s = createMatch(['knight', 'mage']); s.nextWave = Infinity; const hero = getHero(s, 0), enemy = getHero(s, 1);
-  place(hero, 2180, 835); place(enemy, 2200, 835); hero.attackTimer = 100; enemy.attackTimer = 100;
-  stepMatch(s, .05); assert.equal(hero.brushId, TERRAIN.bushes[0].id); assert.equal(bushAt(hero)?.id, hero.brushId);
-  assert.equal(isUnitVisibleToTeam(s, hero, 0), true); assert.equal(isUnitVisibleToTeam(s, hero, 1), false);
-  assert.equal(isUnitVisibleToTeam(s, enemy, 0), false);
-  assert.equal(applyCommand(s, 0, { type: 'attack', targetId: enemy.id }).ok, false);
-  const mana = hero.mana!;
-  assert.equal(applyCommand(s, 0, { type: 'skill', slot: 0, targetId: enemy.id, x: enemy.x, y: enemy.y }).ok, false);
-  assert.equal(hero.mana, mana); assert.equal(hero.cooldowns![0], 0);
-  applyCommand(s, 0, { type: 'attackMove', x: hero.x, y: hero.y }); stepMatch(s, .05); assert.equal(hero.targetId, null);
+test('troops and towers fight autonomously outside both heroes vision',()=>{
+ const s=fixture(['dain','sylra'],true),blue=troop(s,'blue',0,2800),red=troop(s,'red',1,2840);blue.damage=red.damage=20;blue.attackTimer=red.attackTimer=0;assert.equal(isUnitVisibleToTeam(s,blue,1),false);assert.equal(isUnitVisibleToTeam(s,red,0),false);assert.equal(isUnitTargetableBy(s,red,blue),true);until(s,()=>blue.hp<blue.maxHp&&red.hp<red.maxHp);
+ const tower=s.units.find(u=>u.id==='tower-1')!;place(blue,tower.x-80);blue.pendingAttack=undefined;blue.targetId=null;blue.attackTimer=999;tower.attackTimer=0;const hp=blue.hp;assert.equal(isUnitVisibleToTeam(s,blue,1),false);assert.equal(isUnitTargetableBy(s,blue,tower),true);until(s,()=>blue.hp<hp);assert.equal(tower.targetId,blue.id);
 });
 
-test('blind area damage including shield hits reveals its victim for three seconds but does not reveal the caster', () => {
-  const s = createMatch(['knight', 'mage']); s.nextWave = Infinity; const hero = getHero(s, 0), enemy = getHero(s, 1);
-  place(hero, 2180, 835); place(enemy, 2200, 835); hero.attackTimer = 100; enemy.attackTimer = 100; hero.shield = 1000;
-  const hp = hero.hp;
-  applyCommand(s, 1, { type: 'skill', slot: 1, x: hero.x, y: hero.y }); advance(s, .7);
-  assert.equal(hero.hp, hp); assert.ok(hero.shield! < 1000); assert.equal(isUnitVisibleToTeam(s, hero, 1), true);
-  assert.equal(isUnitVisibleToTeam(s, enemy, 0), false); assert.ok(hero.revealedUntil! >= s.time + 2.8);
-  advance(s, 3.1); assert.equal(isUnitVisibleToTeam(s, hero, 1), false);
-  place(hero, 2050, 835); assert.equal(isUnitVisibleToTeam(s, hero, 1), true);
+test('damage reveal never grants global sight outside the observer circle',()=>{
+ const s=fixture(),hero=getHero(s,0),enemy=getHero(s,1);place(hero,1770,835);place(enemy,2620,835);assert.equal(isPointInTeamVision(s,enemy,0),true);assert.equal(isUnitVisibleToTeam(s,enemy,0),false);enemy.revealedUntil=s.time+3;assert.equal(isUnitVisibleToTeam(s,enemy,0),true);assert.equal(applyCommand(s,0,{type:'summoner',slot:'flash',x:hero.x-400,y:hero.y}).ok,true);assert.equal(isPointInTeamVision(s,enemy,0),false);assert.equal(isUnitVisibleToTeam(s,enemy,0),false);
 });
 
-test('a directional projectile can hit an unseen hero in a bush and reveal it', () => {
-  const s = createMatch(['mage', 'knight']); s.nextWave = Infinity; const hero = getHero(s, 0), enemy = getHero(s, 1);
-  place(hero, 2100, 835); place(enemy, 2180, 835); hero.attackTimer = 100; enemy.attackTimer = 100;
-  assert.equal(isUnitVisibleToTeam(s, enemy, 0), false);
-  applyCommand(s, 0, { type: 'skill', slot: 0, x: enemy.x, y: enemy.y }); advance(s, .2);
-  assert.equal(enemy.hp, enemy.maxHp - 125); assert.equal(isUnitVisibleToTeam(s, enemy, 0), true);
-});
-
-test('circular vision includes its exact edge and rejects distant attack guesses, including allied troops outside view', () => {
-  const s = createRawMatch(); advance(s, 3.1); const hero = getHero(s, 0), enemy = getHero(s, 1); place(hero, center); place(enemy, center + RULES.visionRadius);
-  assert.equal(isPointInTeamVision(s, enemy, 0), true); assert.equal(isUnitVisibleToTeam(s, enemy, 0), true);
-  enemy.x += .01; assert.equal(isPointInTeamVision(s, enemy, 0), false); assert.equal(isUnitVisibleToTeam(s, enemy, 0), false);
-  assert.equal(applyCommand(s, 0, { type: 'attack', targetId: enemy.id }).ok, false);
-  const alliedTroop = s.units.find(u => u.kind === 'melee' && u.team === 0)!;
-  assert.equal(isUnitVisibleToTeam(s, alliedTroop, 0), false); assert.equal(isUnitVisibleToTeam(s, hero, 0), true);
-  hero.hp = 0; hero.respawnAt = s.time + 9;
-  assert.equal(isPointInTeamVision(s, { x: center + RULES.visionRadius, y: lane }, 0), true);
-  advance(s, 9.1);
-  assert.equal(hero.x, WORLD.spawnX[0]); assert.equal(isPointInTeamVision(s, { x: center, y: lane }, 0), false);
-});
-
-test('distant minions and towers keep fighting autonomously outside both players circular view', () => {
-  const s = createRawMatch(); advance(s, 3.1);
-  const blue = s.units.find(u => u.team === 0 && u.kind === 'melee')!, red = s.units.find(u => u.team === 1 && u.kind === 'melee')!;
-  place(blue, 2800); place(red, 2840);
-  assert.equal(isUnitVisibleToTeam(s, blue, 1), false); assert.equal(isUnitVisibleToTeam(s, red, 0), false);
-  assert.equal(isUnitTargetableBy(s, red, blue), true);
-  stepMatch(s, .05); assert.ok(blue.hp < blue.maxHp); assert.ok(red.hp < red.maxHp);
-  const tower = s.units.find(u => u.id === 'tower-1')!; place(blue, tower.x - 80); blue.targetId = null; tower.attackTimer = 0;
-  const hp = blue.hp;
-  assert.equal(isUnitVisibleToTeam(s, blue, 1), false); assert.equal(isUnitTargetableBy(s, blue, tower), true);
-  stepMatch(s, .05); assert.equal(tower.targetId, blue.id); assert.ok(blue.hp < hp);
-});
-
-test('damage reveals a bush target locally without granting sight beyond the hero vision circle', () => {
-  const s = createMatch(['mage', 'knight']); s.nextWave = Infinity;
-  const hero = getHero(s, 0), enemy = getHero(s, 1); place(hero, 1770, 835); place(enemy, 2620, 835); hero.skillRanks[3] = 1; hero.level = 4;
-  assert.equal(isPointInTeamVision(s, enemy, 0), true); assert.equal(isUnitVisibleToTeam(s, enemy, 0), false);
-  applyCommand(s, 0, { type: 'skill', slot: 3, x: enemy.x, y: enemy.y });
-  applyCommand(s, 0, { type: 'summoner', slot: 'flash', x: hero.x - 400, y: hero.y }); advance(s, 1.1);
-  assert.equal(enemy.hp, enemy.maxHp - 300); assert.ok(enemy.revealedUntil! > s.time);
-  assert.equal(isPointInTeamVision(s, enemy, 0), false); assert.equal(isUnitVisibleToTeam(s, enemy, 0), false);
-});

@@ -2,11 +2,11 @@
 
 Windows EXE 是透明桌面客户端；公开的 Node.js 服务负责房间、战斗、技能与胜负。客户端在本机绘制画面，通过 HTTPS / WSS 连接同一个线上服务，朋友无需处于同一局域网。本地内置服务继续支持离线练习与局域网备用连接。
 
-MOBA 使用 `glass-lane-v1` 协议，不能连接斗地主的 `https://glass-landlord.onrender.com` 服务。部署时创建独立服务，保留原斗地主服务和配置。
+MOBA 使用 `glass-lane-v2` 协议，不能连接斗地主的 `https://glass-landlord.onrender.com` 服务。部署时创建独立服务，保留原斗地主服务和配置。
 
 ## 当前线上服务
 
-https://glass-lane-moba.onrender.com 已通过实际公网双人建房、开局、移动与技能升级、断线重连和房间清理验收。0.1.2 Windows 客户端通过 desktop/client-config.json 默认连接此地址。Render 免费服务空闲后可能休眠，首次连接需等待唤醒。
+https://glass-lane-moba.onrender.com 为当前服务地址。0.2.0引入四英雄和v2协议，发布时需确认服务器与两端客户端都已更新；具体本次公网验收结果见发布记录。0.2.0 Windows 客户端通过 desktop/client-config.json 默认连接此地址。Render 免费服务空闲后可能休眠，首次连接需等待唤醒。
 
 ## Render Free
 
@@ -44,7 +44,7 @@ pnpm start
 
 ## 发布验收
 
-1. `/health` 返回 `ok: true`、`game: "glass-lane"`、`protocol: "glass-lane-v1"`。
+1. `/health` 返回 `ok: true`、`game: "glass-lane"`、`protocol: "glass-lane-v2"`。
 2. 公开页面的入口、JS、CSS 和两位英雄图片返回成功，错误页面不能冒充健康检查。
 3. 两个独立远程连接创建自己的随机密码测试房、加入、准备并开始，验证双方指令和状态；断线重连恢复原座位，主动退出后清理测试房。
 4. 新客户端预置实际服务地址；不依赖用户手动填写 localhost 或房主 IP。透明、置顶、缩放和点击行为仍由 Windows 客户端提供。
