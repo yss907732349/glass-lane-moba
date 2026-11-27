@@ -23,7 +23,7 @@ app.innerHTML=`<main class="shell">
   <section id="lobby" class="lobby">
     <header class="lobby-header"><h1>单线</h1><span>桌面竞技场</span><small>1 / 1</small></header>
     <div class="lobby-stage"><div class="hero-select" role="group" aria-label="选择英雄"><button class="hero-choice selected" data-hero="knight"><strong>铁卫</strong><small>近战突进</small></button><button class="hero-choice" data-hero="mage"><strong>星术师</strong><small>远程控场</small></button></div><div id="hero-detail" class="hero-summary"></div></div>
-    <div class="room-panel"><div id="entry"><div class="entry-fields"><label>昵称<input id="name" maxlength="16" placeholder="输入昵称" value="玩家" autocomplete="nickname"></label><label>房间密码<input id="password" type="password" maxlength="32" placeholder="4～32 位" autocomplete="off"></label></div><div class="entry-actions"><button id="create" class="primary">创建房间</button><button id="practice">单人练习</button></div><div class="join-row"><input id="room-code" aria-label="房间号" maxlength="6" placeholder="输入 6 位房间号" inputmode="numeric"><button id="join">加入房间</button></div></div><div id="room-detail" hidden></div></div>
+    <div class="room-panel"><p id="room-service-label" class="muted" role="status">正在连接房间服务…</p><div id="entry"><div class="entry-fields"><label>昵称<input id="name" maxlength="16" placeholder="输入昵称" value="玩家" autocomplete="nickname"></label><label>房间密码<input id="password" type="password" maxlength="32" placeholder="4～32 位" autocomplete="off"></label></div><div class="entry-actions"><button id="create" class="primary">创建房间</button><button id="practice">单人练习</button></div><div class="join-row"><input id="room-code" aria-label="房间号" maxlength="32" placeholder="输入 6 位房间号" inputmode="numeric"><button id="join">加入房间</button></div></div><div id="room-detail" hidden></div></div>
   </section>
   <aside id="settings" class="settings panel" hidden><div class="panel-title"><h2>连接与操作</h2><button id="settings-close" aria-label="关闭设置">×</button></div><label>房间服务地址<input id="server-url" placeholder="http://朋友的电脑IP:4327"></label><button id="connect" class="wide">连接</button><p id="local-address" class="muted"></p><details><summary>操作与规则</summary><p></p></details><p class="muted">Ctrl+Shift+J 隐藏／显示，Ctrl+Shift+0 恢复窗口。</p></aside>
   <aside id="minimap" class="minimap" hidden><canvas id="minimap-canvas" width="400" height="224" tabindex="0" role="button" title="点击移动镜头，M 隐藏小地图" aria-label="战场小地图，点击移动镜头，M 切换显示"></canvas></aside>
@@ -37,6 +37,7 @@ const {scene}=bootArena($('arena'));
 let room:Room|null=null,state:MatchState|null=null,playerId='',hero:HeroKind='knight',socket:WebSocket|null=null,online=false,practicePending:'creating'|'adding-bot'|'readying'|'starting'|null=null,toastTimer:ReturnType<typeof setTimeout>,retry:ReturnType<typeof setTimeout>,manualLeave=false;
 let serverUrl=localStorage.getItem('lane.server')||location.origin;
 let localServerUrl='',defaultServerUrl='',startPracticeOnConnect=false;
+let practiceFallback=false,pendingRoomAction:Record<string,unknown>|null=null;
 let hudKey='',shopBuilt=false,resultKey='',mapVisible=true;
 let preview=createMatch(['knight','mage'],[0,1]);for(let t=0;t<22;t+=.05)stepMatch(preview,.05);
 scene.state=preview;
@@ -44,6 +45,18 @@ function toast(message:string){$('toast').textContent=message;$('toast').hidden=
 function send(data:Record<string,unknown>){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(data));else toast('尚未连接房间服务，请在设置中检查地址。');}
 function me(){return room?.players.find(p=>p.id===playerId);}
 function command(c:Command){if(room?.phase==='playing'&&!room.paused)send({type:'command',command:c});}
+function updateServiceLabel(){
+  let name=serverUrl;try{name=new URL(serverUrl).host;}catch{}
+  const local=!!localServerUrl&&serverUrl===localServerUrl;
+  $('room-service-label').textContent=`${online?'已连接':'连接中'} · ${local?'本机 / 局域网':name}${practiceFallback?' · 练习专用，退出后恢复联机':''}`;
+  $('room-service-label').title=`当前房间服务：${serverUrl}。好友必须使用同一服务、房间号和密码。`;
+}
+function multiplayer(action:Record<string,unknown>){
+  if(room||pendingRoomAction)return;
+  if(practiceFallback&&defaultServerUrl){practiceFallback=false;serverUrl=defaultServerUrl;$<HTMLInputElement>('server-url').value=serverUrl;manualLeave=true;pendingRoomAction=action;connect();return;}
+  if(!online){pendingRoomAction=action;toast('正在连接房间服务，连接成功后会继续。');return;}
+  send(action);
+}
 function clearRoom(){room=null;state=null;playerId='';practicePending=null;scene.cancelAim();renderRoom();}
 function advancePractice(){
   if(!practicePending||!room||room.hostId!==playerId)return;
@@ -55,16 +68,17 @@ scene.onCommand=command;
 function connect(){
   clearTimeout(retry);const old=socket;socket=null;if(old){old.onclose=null;old.close();}online=false;
   let url:URL;try{url=new URL(serverUrl);if(!['http:','https:','ws:','wss:'].includes(url.protocol))throw Error();url.protocol=url.protocol==='https:'||url.protocol==='wss:'?'wss:':'ws:';url.pathname='/ws';url.search='';}catch{toast('请输入完整的 http:// 或 https:// 服务地址');return;}
-  $('connection').textContent='正在连接房间服务，首次连接可能稍慢';socket=new WebSocket(url);const current=socket;let resumePending=false;
-  current.onopen=()=>{if(socket!==current)return;online=true;$('connection').textContent='房间服务已连接';$('connection').classList.add('connected');const token=sessionStorage.getItem(`lane.token:${serverUrl}`);if(token&&!manualLeave){resumePending=true;send({type:'resume',token});}else if(manualLeave)clearRoom();if(startPracticeOnConnect){startPracticeOnConnect=false;beginPractice();}};
+  $('connection').textContent='正在连接房间服务，首次连接可能稍慢';updateServiceLabel();socket=new WebSocket(url);const current=socket;let resumePending=false;
+  const flushRoomAction=()=>{if(pendingRoomAction&&!room){const action=pendingRoomAction;pendingRoomAction=null;send(action);}else if(room)pendingRoomAction=null;};
+  current.onopen=()=>{if(socket!==current)return;online=true;updateServiceLabel();$('connection').textContent='房间服务已连接';$('connection').classList.add('connected');const token=sessionStorage.getItem(`lane.token:${serverUrl}`);if(token&&!manualLeave){resumePending=true;send({type:'resume',token});}else{if(manualLeave)clearRoom();flushRoomAction();}if(startPracticeOnConnect){startPracticeOnConnect=false;beginPractice();}};
   current.onmessage=event=>{if(socket!==current)return;const message=JSON.parse(event.data);
-    if(message.type==='welcome'){resumePending=false;playerId=message.playerId;sessionStorage.setItem(`lane.token:${serverUrl}`,message.token);manualLeave=false;room=message.room;state=null;renderRoom();if(practicePending==='creating'){practicePending='adding-bot';send({type:'bot'});}else advancePractice();}
+    if(message.type==='welcome'){resumePending=false;pendingRoomAction=null;playerId=message.playerId;sessionStorage.setItem(`lane.token:${serverUrl}`,message.token);manualLeave=false;room=message.room;state=null;renderRoom();if(practicePending==='creating'){practicePending='adding-bot';send({type:'bot'});}else advancePractice();}
     if(message.type==='room'&&playerId){room=message.room;renderRoom();advancePractice();}
     if(message.type==='state'&&room&&playerId){state=message.state;scene.state=state!;renderHud();}
-    if(message.type==='error'){if(resumePending&&/重连凭据已失效|房间已关闭或重连时间已过/.test(message.message)){resumePending=false;sessionStorage.removeItem(`lane.token:${serverUrl}`);clearRoom();}practicePending=null;toast(message.message);}
+    if(message.type==='error'){if(resumePending&&/重连凭据已失效|房间已关闭或重连时间已过/.test(message.message)){resumePending=false;sessionStorage.removeItem(`lane.token:${serverUrl}`);clearRoom();flushRoomAction();}practicePending=null;toast(message.message==='房间不存在或密码错误。'?'无法加入：请核对房间号和密码，并确认双方连接同一服务。服务重启后需重新建房。':message.message);}
     if(message.type==='left'){sessionStorage.removeItem(`lane.token:${serverUrl}`);clearRoom();}
   };
-  current.onclose=()=>{if(socket!==current)return;online=false;scene.active=false;$('connection').textContent='连接断开，正在重连…';$('connection').classList.remove('connected');retry=setTimeout(connect,2000);};
+  current.onclose=()=>{if(socket!==current)return;online=false;updateServiceLabel();scene.active=false;$('connection').textContent='连接断开，正在重连…';$('connection').classList.remove('connected');retry=setTimeout(connect,2000);};
   current.onerror=()=>{if(socket===current)$('connection').textContent='服务暂时不可用，可在设置更换地址';};
 }
 function heroDetail(){const h=HEROES[hero];$('hero-detail').innerHTML=`<div class="hero-avatar"><img src="/assets/heroes/${hero}.png" alt="${h.name}"></div><div class="hero-info"><h2>${h.name}</h2><span>${h.role}</span><p>${hero==='knight'?'护盾承伤，冲锋切入。':'弹道消耗，闪烁拉扯。'}</p><div class="skill-preview">${h.skills.map(s=>`<span title="${html(s.description)}"><kbd>${s.key}</kbd><span>${s.name}</span></span>`).join('')}</div></div>`;document.querySelectorAll<HTMLElement>('[data-hero]').forEach(b=>{b.classList.toggle('selected',b.dataset.hero===hero);b.setAttribute('aria-pressed',String(b.dataset.hero===hero));});}
@@ -77,7 +91,7 @@ function renderRoom(){
   if(playing&&room){if(!$('clock'))$('matchbar').innerHTML=`<strong id="clock">00:00</strong><span id="match-score">0 : 0</span><small id="wave-label" hidden></small>`;$('matchbar').title=`${room.players.find(p=>p.team===0)?.name||'青方'} 对 ${room.players.find(p=>p.team===1)?.name||'赤方'}`;if(room.paused)toast('有玩家断线，对局已暂停，等待重连。');}
   if(room?.phase==='finished'&&state)renderResult();
 }
-function leave(){manualLeave=true;sessionStorage.removeItem(`lane.token:${serverUrl}`);if(socket?.readyState===WebSocket.OPEN)send({type:'leave'});clearRoom();}
+function leave(){manualLeave=true;pendingRoomAction=null;sessionStorage.removeItem(`lane.token:${serverUrl}`);if(socket?.readyState===WebSocket.OPEN)send({type:'leave'});clearRoom();if(practiceFallback&&defaultServerUrl){practiceFallback=false;serverUrl=defaultServerUrl;$<HTMLInputElement>('server-url').value=serverUrl;connect();}}
 function setText(id:string,value:string){const node=$(id);if(node&&node.textContent!==value)node.textContent=value;}
 function myHero(){return state?.units.find(u=>u.kind==='hero'&&u.team===me()?.team);}
 function ensureHud(u:Unit){
@@ -152,13 +166,13 @@ $('resize-corner').onpointermove=event=>{if(!resizing||!resizeOrigin)return;if(w
 function endResize(){if(!resizing)return;resizing=false;resizeOrigin=null;window.desktop?.endResize();}
 $('resize-corner').onpointerup=endResize;$('resize-corner').onpointercancel=endResize;$('resize-corner').onlostpointercapture=endResize;
 document.querySelectorAll<HTMLButtonElement>('[data-hero]').forEach(b=>b.onclick=()=>{hero=b.dataset.hero as HeroKind;heroDetail();if(room)send({type:'select',hero});});
-$('create').onclick=()=>send({type:'create',name:($('name')as HTMLInputElement).value,password:($('password')as HTMLInputElement).value,hero});
-$('join').onclick=()=>send({type:'join',name:($('name')as HTMLInputElement).value,password:($('password')as HTMLInputElement).value,hero,code:($('room-code')as HTMLInputElement).value});
+$('create').onclick=()=>multiplayer({type:'create',name:($('name')as HTMLInputElement).value,password:($('password')as HTMLInputElement).value,hero});
+$('join').onclick=()=>{const input=$<HTMLInputElement>('room-code'),code=input.value.normalize('NFKC').replace(/\s/g,'');if(!/^\d{6}$/.test(code)){toast('请输入房主当前显示的 6 位房间号。');return;}input.value=code;multiplayer({type:'join',name:($('name')as HTMLInputElement).value,password:($('password')as HTMLInputElement).value,hero,code});};
 function beginPractice(){if(practicePending||room)return;practicePending='creating';const password=Array.from(crypto.getRandomValues(new Uint8Array(16)),n=>n.toString(16).padStart(2,'0')).join('');send({type:'create',name:($('name')as HTMLInputElement).value||'玩家',password,hero});}
-$('practice').onclick=()=>{if(room)return;if(!online){if(localServerUrl){startPracticeOnConnect=true;serverUrl=localServerUrl;$<HTMLInputElement>('server-url').value=serverUrl;manualLeave=true;toast('切换到本机练习，联机请在设置连接线上地址。');connect();}else toast('房间服务正在连接，请稍后重试。');return;}beginPractice();};
+$('practice').onclick=()=>{if(room)return;pendingRoomAction=null;if(!online){if(localServerUrl){practiceFallback=defaultServerUrl!==localServerUrl;startPracticeOnConnect=true;serverUrl=localServerUrl;$<HTMLInputElement>('server-url').value=serverUrl;manualLeave=true;toast('已切换本机练习，退出练习后自动恢复联机。');connect();}else toast('房间服务正在连接，请稍后重试。');return;}beginPractice();};
 $('settings-button').onclick=()=>{closePopovers();$('settings').hidden=!$('settings').hidden;};$('settings-close').onclick=()=>$('settings').hidden=true;
 ($('server-url')as HTMLInputElement).value=serverUrl;
-$('connect').onclick=()=>{const next=($('server-url')as HTMLInputElement).value.trim();if(room){toast('请先离开当前房间，再切换服务。');return;}serverUrl=next;manualLeave=false;localStorage.setItem('lane.server',next);connect();};
+$('connect').onclick=()=>{const next=($('server-url')as HTMLInputElement).value.trim();if(room){toast('请先离开当前房间，再切换服务。');return;}pendingRoomAction=null;practiceFallback=false;startPracticeOnConnect=false;serverUrl=next;manualLeave=false;localStorage.setItem('lane.server',next);connect();};
 let pinned=true;$('pin').onclick=()=>{pinned=!pinned;window.desktop?.pin(pinned);$('pin').textContent=pinned?'取消置顶':'置顶窗口';};$('hide').onclick=()=>{closePopovers();if(window.desktop)window.desktop.hide();else toast('浏览器预览不能隐藏桌面窗口。');};$('close').onclick=()=>{if(window.desktop)window.desktop.close();else toast('可以直接关闭当前浏览器标签页。');};
 window.addEventListener('keydown',event=>{
   const key=event.key.toLowerCase();
