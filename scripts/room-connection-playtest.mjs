@@ -48,9 +48,10 @@ try{
 
   remote=await createGameServer({port:remotePort,host:'127.0.0.1',staticDir:path.join(root,'dist')});
   const upgrades=remote.server.listeners('upgrade');remote.server.removeAllListeners('upgrade');
-  remote.server.on('upgrade',(...args)=>setTimeout(()=>{for(const listener of upgrades)listener.apply(remote.server,args);},1000));
+  remote.server.on('upgrade',(...args)=>setTimeout(()=>{for(const listener of upgrades)listener.apply(remote.server,args);},2000));
   await a.locator('#menu-button').click();await a.locator('#leave-match').click();await a.locator('#entry').waitFor({state:'visible'});
-  await a.locator('#name').fill('切换验证甲');await a.locator('#password').fill('room-test');await a.locator('#create').click();
+  await a.locator('#name').fill('切换验证甲');await a.locator('#password').fill('room-test');
+  assert.notEqual(await a.locator('#connection').textContent(),'房间服务已连接','create is requested before remote handshake completes');await a.locator('#create').click();
   await a.locator('#room-detail').waitFor({state:'visible'});
   const created=await waitMessage(a,'welcome','m.room.players[0].name==="切换验证甲"');
   const aFrames=await frames(a),multiplayerCreates=aFrames.filter(frame=>frame.direction==='sent'&&frame.message.type==='create'&&frame.message.name==='切换验证甲');
@@ -60,11 +61,11 @@ try{
   passed.push('离开本机练习后立即创建联机房间，请求切回默认服务且只发送一次');
   await snapshot(a,'restored-online-room');
 
-  const b=await client();await b.waitForFunction(()=>document.getElementById('connection').textContent.includes('已连接'));
+  const b=await client();
   const formatted=`　${created.room.code.replace(/[0-9]/g,d=>String.fromCharCode(d.charCodeAt(0)+0xfee0))} `;
   await b.locator('#name').fill('切换验证乙');await b.locator('#password').fill('wrong-password');
   await b.locator('#room-code').evaluate((node,value)=>{const clipboardData=new DataTransfer();clipboardData.setData('text/plain',value);const event=new ClipboardEvent('paste',{bubbles:true,cancelable:true,clipboardData});const prevented=!node.dispatchEvent(event);if(!prevented){node.value=value.slice(0,node.maxLength<0?undefined:node.maxLength);node.dispatchEvent(new Event('input',{bubbles:true}));}},formatted);
-  await b.locator('#join').click();
+  assert.notEqual(await b.locator('#connection').textContent(),'房间服务已连接','join is requested before remote handshake completes');await b.locator('#join').click();
   await waitMessage(b,'error','/房间不存在或密码错误/.test(m.message)');
   const firstJoin=(await frames(b)).find(frame=>frame.direction==='sent'&&frame.message.type==='join');
   assert.equal(firstJoin.message.code,created.room.code,'fullwidth and surrounding whitespace normalize to six ASCII digits');
